@@ -1,0 +1,7 @@
+name = "GKWExperiments"
+uuid = "23d24274-9279-4508-bbc8-8b75d9987b64"
+authors = ["Isaia Nisoli"]
+version = "0.0.1-DEV"
+
+[compat]
+julia = "1.1"
