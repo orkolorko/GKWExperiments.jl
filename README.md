@@ -25,12 +25,3 @@ include("docs/make.jl")
 
 Documenter writes the generated HTML to `docs/build`.
 
-## Continuous integration secrets
-
-When enabling CI on a fork or a fresh clone, configure the following repository
-secrets so that documentation deployment and coverage reporting succeed:
-
-- `DOCUMENTER_KEY`: SSH private key with deploy access used by Documenter.jl to
-  push the built documentation to GitHub Pages.
-- `CODECOV_TOKEN`: project token obtained from Codecov that allows uploads of
-  coverage reports produced via Coverage.jl or the Codecov GitHub Action.
