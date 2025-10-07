@@ -17,7 +17,7 @@ end
 # --- test parameters
 s  = ArbComplex(0.75, 0.3)
 K  = 10
-N  = 512
+N  = 16384
 
 @testset "GKW operator: direct vs DFT consistency" begin
     @info "Building direct analytic matrix..."

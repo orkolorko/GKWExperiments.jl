@@ -26,7 +26,7 @@ function zeta_shift_table_on_circle(s::ArbComplex{P}; K::Int, N::Int=1024, prec:
     ws = Vector{ArbComplex{P}}(undef, N)
 
     for m in 0:N-1
-        θ = 2π * m / N
+        θ = 2*ArbReal(π) * m / N
         w = ArbComplex{P}(1 + cos(θ), sin(θ))  # w_m = 1 + e^{iθ}
         ws[m+1] = w
         a = w + ArbComplex{P}(1)               # Hurwitz parameter a = w + 1
