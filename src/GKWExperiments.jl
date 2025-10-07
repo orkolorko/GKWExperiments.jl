@@ -15,8 +15,8 @@ using ArbNumerics
 
 Return the midpoint of an ArbNumerics ball `x`.
 
-This is a thin wrapper around [`ArbNumerics.midpoint`](@ref) that is convenient
-to re-export alongside the rest of the package API.
+This is a thin wrapper around `ArbNumerics.midpoint` that is convenient to
+re-export alongside the rest of the package API.
 """
 mid(x) = ArbNumerics.midpoint(x)
 export ArbComplex, mid
