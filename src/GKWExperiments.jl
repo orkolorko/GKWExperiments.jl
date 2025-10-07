@@ -1,7 +1,23 @@
+"""
+    GKWExperiments
+
+High-level interface for experimenting with the GKW transfer operator in
+ArbNumerics.  The package re-exports helper routines for computing Hurwitz and
+Dirichlet zeta values as well as discretisations of the transfer operator that
+can be used in numerical experiments.
+"""
 module GKWExperiments
 
 using ArbNumerics
 
+"""
+    mid(x)
+
+Return the midpoint of an ArbNumerics ball `x`.
+
+This is a thin wrapper around `ArbNumerics.midpoint` that is convenient to
+re-export alongside the rest of the package API.
+"""
 mid(x) = ArbNumerics.midpoint(x)
 export ArbComplex, mid
 
