@@ -19,23 +19,37 @@ w_m = 1 + e^{i θ_m} with θ_m = 2π m / N on the unit circle centered at 1.
 This supports the identity
 (L_s (w-1)^k)(w) = ∑_{j=0}^k (-1)^{k-j} binom(k,j) ζ(2s+j, w+1).
 """
-function zeta_shift_table_on_circle(s::ArbComplex{P}; K::Int, N::Int=1024, prec::Int=P) where {P}
+function zeta_shift_table_on_circle(s::ArbComplex{P};
+                                    K::Int,
+                                    N::Int = 1024,
+                                    prec::Int = P) where {P}
     @assert K ≥ 0
     @assert N ≥ 2
-    Z  = Matrix{ArbComplex{P}}(undef, K+1, N)
+
+    Z  = Matrix{ArbComplex{P}}(undef, K + 1, N)
     ws = Vector{ArbComplex{P}}(undef, N)
 
+    twoπ = 2 * ArbReal(π)
+    one  = ArbReal(1)
+
     for m in 0:N-1
-        θ = 2*ArbReal(π) * m / N
-        w = ArbComplex{P}(1 + cos(θ), sin(θ))  # w_m = 1 + e^{iθ}
+        θ = twoπ * ArbReal(m) / ArbReal(N)
+        # evaluate cos/sin in Arb precision
+        cθ = cos(θ)
+        sθ = sin(θ)
+        w  = ArbComplex{P}(one + cθ, sθ)          # w = 1 + e^{iθ}
         ws[m+1] = w
-        a = w + ArbComplex{P}(1)               # Hurwitz parameter a = w + 1
-        @inbounds for j in 0:K
-            Z[j+1, m+1] = hurwitz_zeta(2*s + ArbComplex{P}(j), a; prec=prec)
+        a = w + ArbComplex{P}(one)                # a = w + 1
+
+        # Hurwitz ζ(2s + j, a)
+        for j in 0:K
+            sj = 2 * s + ArbComplex{P}(ArbReal(j))
+            Z[j+1, m+1] = hurwitz_zeta(sj, a; prec = prec)
         end
     end
     return Z, ws
 end
+
 
 # ---------- Evaluate L_s on the grid for f_k(w) = (w-1)^k using the table ----------
 """
