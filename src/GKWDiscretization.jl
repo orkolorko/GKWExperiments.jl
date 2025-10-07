@@ -114,6 +114,21 @@ end
 end
 
 # Build M_{ℓ,k} = (-1)^{k+ℓ} ∑_{j=0}^k (-1)^j C(k,j) * (2s+j)_ℓ / ℓ! * ζ(2s+j+ℓ, 2)
+"""
+    gkw_matrix_direct(s::ArbComplex{P}; K::Int=20, prec::Int=P) -> Matrix{ArbComplex{P}}
+
+Assemble the `(K+1)×(K+1)` Galerkin matrix of the GKW transfer operator using
+its direct series expansion involving Hurwitz zeta values at the point `a = 2`.
+
+The entry with zero-based indices `(ℓ, k)` is computed as
+
+```
+(-1)^{k+ℓ} ∑_{j=0}^k (-1)^j binomial(k, j) (2s + j)_ℓ / ℓ! * ζ(2s + j + ℓ, 2),
+```
+
+where `(2s + j)_ℓ` denotes the rising factorial.  The keyword argument `prec`
+controls the Arb precision used for the intermediate Hurwitz zeta evaluations.
+"""
 function gkw_matrix_direct(s::ArbComplex{P}; K::Int=20, prec::Int=P) where {P}
     @assert K ≥ 0
     M = Matrix{ArbComplex{P}}(undef, K+1, K+1)
