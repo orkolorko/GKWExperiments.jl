@@ -28,6 +28,10 @@ julia> size(Z), length(ws)
 All exported functions are documented in the API reference below.  Docstrings
 are available at the REPL through Julia's help mode as usual, e.g. `?mid`.
 
+```@docs
+GKWExperiments.GKWExperiments
+```
+
 ```@index
 ```
 
