@@ -115,6 +115,7 @@ end
         result_channel = RemoteChannel(() -> Channel{NamedTuple}(8))
         configure_certification!(; job_channel = job_channel, result_channel = result_channel,
             certification_log = certification_log, snapshot = snapshot_base)
+        foreach(pid -> remote_do(CertifScripts.dowork, pid, job_channel, result_channel), added_workers)
 
         task = @async begin
             try
@@ -130,7 +131,7 @@ end
         snapshot_ready = false
         for _ in 1:200
             snapshot_ready = any(isfile, files)
-            progress = length(certification_log) >= 2 && !isempty(arcs)
+            progress = length(certification_log) >= 1
             if progress && snapshot_ready
                 break
             end
@@ -167,6 +168,7 @@ end
         result_channel = RemoteChannel(() -> Channel{NamedTuple}(8))
         configure_certification!(; job_channel = job_channel, result_channel = result_channel,
             certification_log = log_snapshot, snapshot = snapshot_base)
+        foreach(pid -> remote_do(CertifScripts.dowork, pid, job_channel, result_channel), added_workers)
 
         adaptive_arcs!(arcs_snapshot, cache_snapshot, pending_snapshot, η; check_interval = 10)
     finally
