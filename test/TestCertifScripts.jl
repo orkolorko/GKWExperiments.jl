@@ -137,9 +137,15 @@ end
         @test progress_status === :ok
         @test snapshot_status === :ok
 
+        interrupt_status = :ok
         if !istaskdone(task)
-            Base.throwto(task, InterruptException())
+            @info "Interrupting adaptive arcs task"
+            schedule(task, InterruptException(); error = true)
+            interrupt_status = Base.timedwait(() -> istaskdone(task), 10.0;
+                pollint = 0.05)
+            @info "Adaptive arcs task status" interrupt_status
         end
+        @test interrupt_status === :ok
         wait(task)
     finally
         rmprocs(added_workers)
