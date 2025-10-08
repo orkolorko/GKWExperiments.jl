@@ -29,4 +29,8 @@ include("GKWDiscretization.jl")
 using .GKWDiscretization
 export zeta_shift_table_on_circle, values_Ls_fk_from_table!, coeffs_from_boundary, build_Ls_matrix_arb, gkw_matrix_direct
 
+include("CertifScripts.jl")
+using .CertifScripts
+export CertifScripts
+
 end
