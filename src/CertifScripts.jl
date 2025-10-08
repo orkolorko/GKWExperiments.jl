@@ -270,14 +270,19 @@ Return an upper bound on the ℓ₁ resolvent norm of the original matrix
 given the bounds obtained from the Schur form.
 """
 function bound_res_original(l2pseudo, η, norm_Z, norm_Z_inv, errF, errT, N)
-    bound = setrounding(Float64, RoundUp) do
-        l2pseudo = l2pseudo * 1 / (1 - η)
-        norm_Z_sup = (norm_Z - 1).c + (norm_Z - 1).r
-        norm_Z_inv_sup = (norm_Z_inv - 1).c + (norm_Z_inv - 1).r
+    l2pseudo_sup = _upper_bound(l2pseudo) / (1 - η)
+    norm_Z_sup = max(_upper_bound_offset(norm_Z, 1), 0.0)
+    norm_Z_inv_sup = max(_upper_bound_offset(norm_Z_inv, 1), 0.0)
+    errF_sup = _upper_bound(errF)
+    errT_sup = _upper_bound(errT)
 
-        ϵ = max(max(errF, errT), max(norm_Z_sup, norm_Z_inv_sup))
-        @info "The ϵ in the Schur theorems $ϵ"
-        return (2 * (1 + ϵ^2) * l2pseudo * sqrt(N)) / (1 - 2 * ϵ * (1 + ϵ^2) * l2pseudo)
+    ϵ = max(max(errF_sup, errT_sup), max(norm_Z_sup, norm_Z_inv_sup))
+    @info "The ϵ in the Schur theorems $ϵ"
+
+    bound = setrounding(Float64, RoundUp) do
+        numerator = 2 * (1 + ϵ^2) * l2pseudo_sup * sqrt(N)
+        denominator = 1 - 2 * ϵ * (1 + ϵ^2) * l2pseudo_sup
+        return numerator / denominator
     end
     return bound
 end
@@ -333,27 +338,53 @@ function _zero_ballmatrix(n::Integer)
     return BallArithmetic.BallMatrix(zeros(ComplexF64, n, n))
 end
 
-function _polynomial_matrix(coeffs::AbstractVector, M::BallArithmetic.BallMatrix)
+function _as_ball(value)
+    value isa BallArithmetic.Ball && return value
+    if value isa Complex
+        return BallArithmetic.Ball(ComplexF64(value), 0.0)
+    elseif value isa Real
+        return BallArithmetic.Ball(Float64(value), 0.0)
+    else
+        throw(ArgumentError("unsupported value type $(typeof(value)) for ball conversion"))
+    end
+end
+
+function _upper_bound(value)
+    ball = _as_ball(value)
+    return setrounding(Float64, RoundUp) do
+        abs(ball.c) + ball.r
+    end
+end
+
+function _upper_bound_offset(value, offset::Real)
+    ball = _as_ball(value) - _as_ball(offset)
+    return setrounding(Float64, RoundUp) do
+        abs(ball.c) + ball.r
+    end
+end
+
+function _polynomial_matrix(coeffs, M::BallArithmetic.BallMatrix)
+    coeffs_vec = collect(coeffs)
     n = size(M, 1)
     result = _zero_ballmatrix(n)
     identity = _identity_ballmatrix(n)
-    for coeff in reverse(coeffs)
+    for coeff in reverse(coeffs_vec)
         result = result * M
         if !iszero(coeff)
-            value = coeff isa BallArithmetic.Ball ? coeff : BallArithmetic.Ball(ComplexF64(coeff), 0.0)
+            value = _as_ball(coeff)
             result += value * identity
         end
     end
     return result
 end
 
-_polynomial_matrix(coeffs::AbstractVector, M::AbstractMatrix) =
+_polynomial_matrix(coeffs, M::AbstractMatrix) =
     _polynomial_matrix(coeffs, BallArithmetic.BallMatrix(M))
 
 function _load_certification_dependencies(pids)
     Distributed.@sync begin
         for pid in pids
-            Distributed.@async remotecall_eval(pid, :(begin
+            Distributed.@async Distributed.remotecall_eval(pid, :(begin
                 using LinearAlgebra
                 using BallArithmetic
                 using GKWExperiments
@@ -366,7 +397,7 @@ end
 function _set_schur_on_workers(pids, matrix)
     Distributed.@sync begin
         for pid in pids
-            Distributed.@async remotecall_wait(pid, set_schur_matrix!, matrix)
+            Distributed.@async Distributed.remotecall_wait(pid, set_schur_matrix!, matrix)
         end
     end
 end
@@ -398,10 +429,10 @@ function compute_schur_and_error(A::BallArithmetic.BallMatrix; polynomial = noth
     sigma_Z = BallArithmetic.svdbox(bZ)
 
     norm_Z = sigma_Z[1]
-    norm_Z_inv = 1.0 / sigma_Z[end]
+    norm_Z_inv = BallArithmetic.Ball(1.0, 0.0) / sigma_Z[end]
 
     if polynomial === nothing
-        return S, errF, errT, norm_Z, norm_Z_inv
+        return S, _as_ball(errF), _as_ball(errT), _as_ball(norm_Z), _as_ball(norm_Z_inv)
     end
 
     coeffs = collect(polynomial)
@@ -409,7 +440,7 @@ function compute_schur_and_error(A::BallArithmetic.BallMatrix; polynomial = noth
     pT = _polynomial_matrix(coeffs, bT)
     errT_poly = BallArithmetic.svd_bound_L2_opnorm(bZ * pT * bZ' - pA)
 
-    return S, errF, errT_poly, norm_Z, norm_Z_inv
+    return S, _as_ball(errF), _as_ball(errT_poly), _as_ball(norm_Z), _as_ball(norm_Z_inv)
 end
 
 """
