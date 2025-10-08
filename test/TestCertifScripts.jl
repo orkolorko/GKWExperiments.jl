@@ -127,21 +127,17 @@ end
             end
         end
 
-        progress = false
-        snapshot_ready = false
-        for _ in 1:200
-            snapshot_ready = any(isfile, files)
-            progress = length(certification_log) >= 1
-            if progress && snapshot_ready
-                break
-            end
-            sleep(0.05)
+        progress_status = Base.timedwait(() -> length(certification_log) >= 1, 30.0;
+            poll_interval = 0.05)
+        snapshot_status = Base.timedwait(() -> any(isfile, files), 30.0;
+            poll_interval = 0.05)
+
+        @test progress_status === :ok
+        @test snapshot_status === :ok
+
+        if !istaskdone(task)
+            Base.throwto(task, InterruptException())
         end
-
-        @test progress
-        @test snapshot_ready
-
-        Base.throwto(task, InterruptException())
         wait(task)
     finally
         rmprocs(added_workers)
