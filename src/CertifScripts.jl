@@ -411,7 +411,7 @@ end
 function _set_schur_on_workers(pids, matrix)
     Distributed.@sync begin
         for pid in pids
-            Distributed.@async Distributed.remotecall_wait(pid, set_schur_matrix!, matrix)
+            Distributed.@async Distributed.remotecall_wait(set_schur_matrix!, pid, matrix)
         end
     end
 end
