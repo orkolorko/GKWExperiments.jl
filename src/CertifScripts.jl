@@ -363,8 +363,22 @@ function _upper_bound_offset(value, offset::Real)
     end
 end
 
+function _is_identity_polynomial(coeffs)
+    length(coeffs) == 2 || return false
+
+    c0 = _as_ball(coeffs[1])
+    c1 = _as_ball(coeffs[2])
+
+    return c0.c == zero(c0.c) && c0.r == 0 && c1.c == one(c1.c) && c1.r == 0
+end
+
 function _polynomial_matrix(coeffs, M::BallArithmetic.BallMatrix)
     coeffs_vec = collect(coeffs)
+
+    if _is_identity_polynomial(coeffs_vec)
+        return M
+    end
+
     n = size(M, 1)
     result = _zero_ballmatrix(n)
     identity = _identity_ballmatrix(n)
@@ -384,7 +398,7 @@ _polynomial_matrix(coeffs, M::AbstractMatrix) =
 function _load_certification_dependencies(pids)
     Distributed.@sync begin
         for pid in pids
-            Distributed.@async Distributed.remotecall_eval(pid, :(begin
+            Distributed.@async Distributed.remotecall_eval(Main, pid, :(begin
                 using LinearAlgebra
                 using BallArithmetic
                 using GKWExperiments
