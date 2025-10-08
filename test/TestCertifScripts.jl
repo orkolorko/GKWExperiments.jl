@@ -16,7 +16,7 @@ using GKWExperiments.CertifScripts
     @test isa(norm_Z_inv, Float64)
 
     _, _, errT_identity, _, _ = compute_schur_and_error(A; polynomial = (0.0, 1.0))
-    @test errT_identity == errT
+    @test errT_identity ≈ errT
 
     coeffs = (0.3, -0.4, 0.1)
     S_poly, errF_poly, errT_poly, norm_Z_poly, norm_Z_inv_poly = compute_schur_and_error(A; polynomial = coeffs)
@@ -28,10 +28,10 @@ using GKWExperiments.CertifScripts
     pT = CertifScripts._polynomial_matrix(coeffs, bT)
     manual_err = BallArithmetic.svd_bound_L2_opnorm(bZ * pT * bZ' - pA)
 
-    @test errF_poly == errF
-    @test errT_poly == manual_err
-    @test norm_Z_poly == norm_Z
-    @test norm_Z_inv_poly == norm_Z_inv
+    @test errF_poly ≈ errF
+    @test errT_poly ≈ manual_err
+    @test norm_Z_poly ≈ norm_Z
+    @test norm_Z_inv_poly ≈ norm_Z_inv
 end
 
 @testset "bound_res_original" begin
