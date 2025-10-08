@@ -127,8 +127,10 @@ end
             end
         end
 
+        @info "Waiting for certification progress" log_length = length(certification_log) pending = length(pending) arcs = length(arcs)
         progress_status = Base.timedwait(() -> length(certification_log) >= 1, 30.0;
             poll_interval = 0.05)
+        @info "Waiting for snapshot files" status = progress_status files = files existing = filter(isfile, files)
         snapshot_status = Base.timedwait(() -> any(isfile, files), 30.0;
             poll_interval = 0.05)
 
@@ -145,6 +147,8 @@ end
 
     snapshot = choose_snapshot_to_load(snapshot_base)
     @test snapshot !== nothing
+
+    @info "Loaded snapshot" snapshot_base snapshot_keys = keys(snapshot)
 
     arcs_snapshot = snapshot["arcs"]
     cache_snapshot = snapshot["cache"]
@@ -164,9 +168,11 @@ end
         result_channel = RemoteChannel(() -> Channel{NamedTuple}(8))
         configure_certification!(; job_channel = job_channel, result_channel = result_channel,
             certification_log = log_snapshot, snapshot = snapshot_base)
+        @info "Resuming adaptive arcs" arcs = length(arcs_snapshot) pending = length(pending_snapshot) log_length = length(log_snapshot)
         foreach(pid -> remote_do(CertifScripts.dowork, pid, job_channel, result_channel), added_workers)
 
         adaptive_arcs!(arcs_snapshot, cache_snapshot, pending_snapshot, η; check_interval = 10)
+        @info "Adaptive arcs finished" arcs = length(arcs_snapshot) pending = length(pending_snapshot) log_length = length(log_snapshot)
     finally
         rmprocs(added_workers)
     end
