@@ -32,5 +32,10 @@ are available at the REPL through Julia's help mode as usual, e.g. `?mid`.
 ```
 
 ```@autodocs
-Modules = [GKWExperiments, GKWExperiments.GKWDiscretization, GKWExperiments.ArbZeta]
+Modules = [
+    GKWExperiments,
+    GKWExperiments.GKWDiscretization,
+    GKWExperiments.ArbZeta,
+    GKWExperiments.CertifScripts,
+]
 ```
