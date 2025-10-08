@@ -9,10 +9,10 @@ using GKWExperiments.CertifScripts
     S, errF, errT, norm_Z, norm_Z_inv = compute_schur_and_error(A)
 
     @test isa(S, LinearAlgebra.Schur)
-    @test isa(errF, BallArithmetic.Ball)
-    @test isa(errT, BallArithmetic.Ball)
-    @test isa(norm_Z, BallArithmetic.Ball)
-    @test isa(norm_Z_inv, BallArithmetic.Ball)
+    @test isa(errF, Float64)
+    @test isa(errT, Float64)
+    @test isa(norm_Z, Float64)
+    @test isa(norm_Z_inv, Float64)
 
     _, _, errT_identity, _, _ = compute_schur_and_error(A; polynomial = (0.0, 1.0))
     @test errT_identity == errT

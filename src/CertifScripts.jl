@@ -427,12 +427,23 @@ function compute_schur_and_error(A::BallArithmetic.BallMatrix; polynomial = noth
     errT = BallArithmetic.svd_bound_L2_opnorm(bZ * bT * bZ' - A)
 
     sigma_Z = BallArithmetic.svdbox(bZ)
+    max_sigma = sigma_Z[1]
+    min_sigma = sigma_Z[end]
 
-    norm_Z = sigma_Z[1]
-    norm_Z_inv = BallArithmetic.Ball(1.0, 0.0) / sigma_Z[end]
+    norm_Z = setrounding(Float64, RoundUp) do
+        return abs(max_sigma.c) + max_sigma.r
+    end
+
+    min_sigma_lower = setrounding(Float64, RoundDown) do
+        return max(min_sigma.c - min_sigma.r, 0.0)
+    end
+    min_sigma_lower <= 0 && throw(ArgumentError("Schur factor has non-positive smallest singular value bound"))
+    norm_Z_inv = setrounding(Float64, RoundUp) do
+        return 1 / min_sigma_lower
+    end
 
     if polynomial === nothing
-        return S, _as_ball(errF), _as_ball(errT), _as_ball(norm_Z), _as_ball(norm_Z_inv)
+        return S, errF, errT, norm_Z, norm_Z_inv
     end
 
     coeffs = collect(polynomial)
@@ -440,7 +451,7 @@ function compute_schur_and_error(A::BallArithmetic.BallMatrix; polynomial = noth
     pT = _polynomial_matrix(coeffs, bT)
     errT_poly = BallArithmetic.svd_bound_L2_opnorm(bZ * pT * bZ' - pA)
 
-    return S, _as_ball(errF), _as_ball(errT_poly), _as_ball(norm_Z), _as_ball(norm_Z_inv)
+    return S, errF, errT_poly, norm_Z, norm_Z_inv
 end
 
 """
