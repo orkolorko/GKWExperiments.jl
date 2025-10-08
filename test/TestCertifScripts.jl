@@ -129,10 +129,10 @@ end
 
         @info "Waiting for certification progress" log_length = length(certification_log) pending = length(pending) arcs = length(arcs)
         progress_status = Base.timedwait(() -> length(certification_log) >= 1, 30.0;
-            poll_interval = 0.05)
+            pollint = 0.05)
         @info "Waiting for snapshot files" status = progress_status files = files existing = filter(isfile, files)
         snapshot_status = Base.timedwait(() -> any(isfile, files), 30.0;
-            poll_interval = 0.05)
+            pollint = 0.05)
 
         @test progress_status === :ok
         @test snapshot_status === :ok
