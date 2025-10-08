@@ -6,12 +6,18 @@ version = "0.0.1-DEV"
 [deps]
 ArbNumerics = "7e558dbc-694d-5a72-987c-6f4ebed21442"
 BallArithmetic = "77e4f72b-b5a4-4fb0-ac2a-dcc32095a072"
+Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 Pseudospectra = "d6c5b33e-0240-5bd5-a771-a97ae748a961"
 
 [compat]
 ArbNumerics = "1.6.3"
 BallArithmetic = "0.1.1"
+Distributed = "1.11.0"
+JLD2 = "0.6.2"
+LinearAlgebra = "1.11.0"
 Plots = "1.41.1"
 Pseudospectra = "0.2.0"
 julia = "1.1"
