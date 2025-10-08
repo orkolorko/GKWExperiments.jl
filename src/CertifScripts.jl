@@ -4,10 +4,11 @@ using Distributed
 using LinearAlgebra
 using BallArithmetic
 using JLD2
+using Base: dirname, mod1
 
 export dowork, adaptive_arcs!, bound_res_original, choose_snapshot_to_load,
        save_snapshot!, configure_certification!, set_schur_matrix!,
-       compute_schur_and_error
+       compute_schur_and_error, CertificationCircle, points_on, run_certification
 
 const _schur_matrix = Ref{Union{Nothing, BallArithmetic.BallMatrix}}(nothing)
 const _job_channel = Ref{Union{Nothing, RemoteChannel}}(nothing)
@@ -15,6 +16,44 @@ const _result_channel = Ref{Union{Nothing, RemoteChannel}}(nothing)
 const _certification_log = Ref{Any}(nothing)
 const _snapshot_path = Ref{Union{Nothing, AbstractString}}(nothing)
 const _log_io = Ref{IO}(stdout)
+
+"""
+    CertificationCircle(center, radius; samples = 256)
+
+Discretisation of a circle with centre `center`, radius `radius`, and
+`samples` equally spaced points used for certification runs.
+"""
+struct CertificationCircle
+    center::ComplexF64
+    radius::Float64
+    samples::Int
+end
+
+function CertificationCircle(center::Number, radius::Real; samples::Integer = 256)
+    samples < 3 && throw(ArgumentError("circle discretisation requires at least 3 samples"))
+    radius <= 0 && throw(ArgumentError("circle radius must be positive"))
+    return CertificationCircle(ComplexF64(center), Float64(radius), Int(samples))
+end
+
+"""
+    points_on(circle)
+
+Return the discretisation of `circle` used for certification.
+"""
+function points_on(circle::CertificationCircle)
+    θs = range(0, 2π, length = circle.samples + 1)[1:(end - 1)]
+    return circle.center .+ circle.radius .* exp.(θs .* im)
+end
+
+function _initial_arcs(circle::CertificationCircle)
+    points = points_on(circle)
+    n = length(points)
+    arcs = Vector{Tuple{ComplexF64, ComplexF64}}(undef, n)
+    for i in 1:n
+        arcs[i] = (points[i], points[mod1(i + 1, n)])
+    end
+    return arcs
+end
 
 """
     set_schur_matrix!(T)
@@ -311,6 +350,34 @@ end
 _polynomial_matrix(coeffs::AbstractVector, M::AbstractMatrix) =
     _polynomial_matrix(coeffs, BallArithmetic.BallMatrix(M))
 
+function _load_certification_dependencies(pids)
+    Distributed.@sync begin
+        for pid in pids
+            Distributed.@async remotecall_eval(pid, :(begin
+                using LinearAlgebra
+                using BallArithmetic
+                using GKWExperiments
+                using GKWExperiments.CertifScripts
+            end))
+        end
+    end
+end
+
+function _set_schur_on_workers(pids, matrix)
+    Distributed.@sync begin
+        for pid in pids
+            Distributed.@async remotecall_wait(pid, set_schur_matrix!, matrix)
+        end
+    end
+end
+
+function _cleanup_snapshots(basepath)
+    for suffix in ("_A.jld2", "_B.jld2")
+        filename = basepath * suffix
+        isfile(filename) && rm(filename; force = true)
+    end
+end
+
 """
     compute_schur_and_error(A; polynomial = nothing)
 
@@ -344,5 +411,104 @@ function compute_schur_and_error(A::BallArithmetic.BallMatrix; polynomial = noth
 
     return S, errF, errT_poly, norm_Z, norm_Z_inv
 end
+
+"""
+    run_certification(A, circle, num_workers; polynomial = nothing, kwargs...)
+
+Run the adaptive certification routine on `circle` by spawning `num_workers`
+background workers.  When `polynomial` is supplied (as coefficients in
+ascending order), the certification is performed on `p(T)` and the returned
+error term corresponds to the reconstruction error of `p(A)`.
+
+Additional keyword arguments:
+
+* `η`: Threshold for the adaptive refinement (default `0.5`).
+* `check_interval`: How often progress and snapshots are recorded.
+* `snapshot_path`: Base filename used for alternating snapshot files.  When
+  omitted, a temporary path is chosen and cleaned up automatically.
+* `log_io`: IO target for log messages (default `stdout`).
+* `channel_capacity`: Size of the job and result channels (default `1024`).
+
+Returns a named tuple containing the Schur data, certification log, and the
+computed resolvent bounds.
+"""
+function run_certification(A::BallArithmetic.BallMatrix, circle::CertificationCircle,
+        num_workers::Integer; polynomial = nothing, η::Real = 0.5,
+        check_interval::Integer = 100, snapshot_path::Union{Nothing, AbstractString} = nothing,
+        log_io::IO = stdout, channel_capacity::Integer = 1024)
+
+    num_workers < 1 && throw(ArgumentError("num_workers must be positive"))
+    channel_capacity < 1 && throw(ArgumentError("channel_capacity must be positive"))
+    check_interval < 1 && throw(ArgumentError("check_interval must be positive"))
+
+    η = Float64(η)
+    (η <= 0 || η >= 1) && throw(ArgumentError("η must belong to (0, 1)"))
+
+    coeffs = polynomial === nothing ? nothing : collect(polynomial)
+    schur_data = coeffs === nothing ?
+        compute_schur_and_error(A) :
+        compute_schur_and_error(A; polynomial = coeffs)
+
+    S, errF, errT, norm_Z, norm_Z_inv = schur_data
+    bT = BallArithmetic.BallMatrix(S.T)
+    schur_matrix = coeffs === nothing ? bT : _polynomial_matrix(coeffs, bT)
+
+    snapshot_base = snapshot_path === nothing ? tempname() : String(snapshot_path)
+    mkpath(dirname(snapshot_base))
+    cleanup_snapshot = snapshot_path === nothing
+
+    added_workers = Int[]
+    certification_log = Any[]
+    job_channel = nothing
+    result_channel = nothing
+
+    try
+        added_workers = addprocs(num_workers)
+        isempty(added_workers) && throw(ArgumentError("no worker processes available for certification"))
+
+        _load_certification_dependencies(added_workers)
+        _set_schur_on_workers(added_workers, schur_matrix)
+
+        job_channel = RemoteChannel(() -> Channel{Tuple{Int, ComplexF64}}(channel_capacity))
+        result_channel = RemoteChannel(() -> Channel{NamedTuple}(channel_capacity))
+
+        configure_certification!(; job_channel = job_channel, result_channel = result_channel,
+            certification_log = certification_log, snapshot = snapshot_base, io = log_io)
+
+        foreach(pid -> remote_do(dowork, pid, job_channel, result_channel), added_workers)
+
+        arcs = _initial_arcs(circle)
+        cache = Dict{ComplexF64, Any}()
+        pending = Dict{Int, Tuple{ComplexF64, ComplexF64}}()
+
+        adaptive_arcs!(arcs, cache, pending, η; check_interval = check_interval)
+
+        isempty(certification_log) && throw(ErrorException("certification produced no samples"))
+
+        min_sigma = minimum(log -> log.lo_val, certification_log)
+        l2pseudo = maximum(log -> log.hi_res, certification_log)
+        resolvent_bound = bound_res_original(l2pseudo, η, norm_Z, norm_Z_inv, errF, errT, size(A, 1))
+
+        return (; schur = S, schur_matrix, certification_log, minimum_singular_value = min_sigma,
+            l2_resolvent_bound = l2pseudo, l1_resolvent_bound = resolvent_bound,
+            errF, errT, norm_Z, norm_Z_inv, circle, polynomial = coeffs,
+            snapshot_base)
+    finally
+        if !isempty(added_workers)
+            rmprocs(added_workers)
+        end
+        _job_channel[] = nothing
+        _result_channel[] = nothing
+        _certification_log[] = nothing
+        _snapshot_path[] = nothing
+        _log_io[] = stdout
+        if cleanup_snapshot && (isfile(snapshot_base * "_A.jld2") || isfile(snapshot_base * "_B.jld2"))
+            _cleanup_snapshots(snapshot_base)
+        end
+    end
+end
+
+run_certification(A::AbstractMatrix, circle::CertificationCircle, num_workers::Integer; kwargs...) =
+    run_certification(BallArithmetic.BallMatrix(A), circle, num_workers; kwargs...)
 
 end # module

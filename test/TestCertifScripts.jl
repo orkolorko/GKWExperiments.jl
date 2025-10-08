@@ -46,3 +46,26 @@ end
     @test isa(bound, Float64)
     @test bound > 0
 end
+
+@testset "run_certification" begin
+    A = BallArithmetic.BallMatrix([1.0 + 0.0im  0.05 - 0.01im; 0.0 + 0.0im  0.9 + 0.0im])
+    circle = CertificationCircle(0.9 + 0.0im, 0.2; samples = 4)
+
+    pts = points_on(circle)
+    @test length(pts) == circle.samples
+    @test all(isapprox.(abs.(pts .- circle.center), circle.radius; atol = 1e-8))
+
+    result = run_certification(A, circle, 1;
+        polynomial = (0.0, 1.0),
+        η = 0.6,
+        check_interval = circle.samples + 5,
+        channel_capacity = 8)
+
+    @test !isempty(result.certification_log)
+    @test result.minimum_singular_value > 0
+    @test result.l2_resolvent_bound > 0
+    @test result.l1_resolvent_bound > 0
+    @test result.schur_matrix isa BallArithmetic.BallMatrix
+    @test result.circle == circle
+    @test result.polynomial == [0.0, 1.0]
+end
