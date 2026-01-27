@@ -5,10 +5,26 @@ High-level interface for experimenting with the GKW transfer operator in
 ArbNumerics.  The package re-exports helper routines for computing Hurwitz and
 Dirichlet zeta values as well as discretisations of the transfer operator that
 can be used in numerical experiments.
+
+The certification infrastructure is provided by BallArithmetic.jl, which this
+package re-exports for convenience.
 """
 module GKWExperiments
 
 using ArbNumerics
+using BallArithmetic
+
+# Re-export BallArithmetic certification infrastructure
+using BallArithmetic.CertifScripts
+export CertifScripts
+export CertificationCircle, points_on, run_certification
+export compute_schur_and_error, bound_res_original
+export configure_certification!, set_schur_matrix!, dowork, adaptive_arcs!
+export choose_snapshot_to_load, save_snapshot!, poly_from_roots, polyconv
+
+# Re-export core BallArithmetic types and functions
+export Ball, BallMatrix, BallVector
+export svd_bound_L2_opnorm, svdbox
 
 """
     mid(x)
@@ -21,16 +37,48 @@ to re-export alongside the rest of the package API.
 mid(x) = ArbNumerics.midpoint(x)
 export ArbComplex, mid
 
+# Zeta functions (GKW-specific wrappers around libarb)
 include("ArbZeta.jl")
-using .ArbZeta: dirichlet_zeta, hurwitz_zeta  # bring symbols into scope
+using .ArbZeta: dirichlet_zeta, hurwitz_zeta
 export dirichlet_zeta, hurwitz_zeta
 
+# GKW operator norm bounds and H² whitening
+include("Constants.jl")
+using .Constants
+export compute_C2, compute_Δ, is_certified
+export h2_whiten, power_opnorms, lr_power_bounds_from_Ak
+export poly_bridge_constant_powers_from_coeffs, poly_perturbation_bound_powers_from_coeffs
+
+# Transfer operator matrix construction
 include("GKWDiscretization.jl")
 using .GKWDiscretization
-export zeta_shift_table_on_circle, values_Ls_fk_from_table!, coeffs_from_boundary, build_Ls_matrix_arb, gkw_matrix_direct
+export zeta_shift_table_on_circle, values_Ls_fk_from_table!
+export coeffs_from_boundary, build_Ls_matrix_arb, gkw_matrix_direct
 
-include("CertifScripts.jl")
-using .CertifScripts
-export CertifScripts
+# Polynomial utilities for eigenvalue certification
+include("Polynomials.jl")
+using .Polynomials
+export polyconv, polyval, poly_scale, polypow
+export deflation_polynomial, coeffs_about_c_from_about_0, coeffs_about_0_from_about_c
+
+# Eigenspace certification for GKW operator (uses BallArithmetic VBD)
+include("EigenspaceCertification.jl")
+using .EigenspaceCertification
+export GKWEigenCertificationResult, certify_gkw_eigenspaces
+export arb_to_ball_matrix
+
+# Finite-to-infinite dimensional lift (resolvent bridge and spectral stability)
+include("InfiniteDimensionalLift.jl")
+using .InfiniteDimensionalLift
+export InfiniteDimCertificationResult
+export resolvent_bridge_condition, certified_resolvent_bound
+export eigenvalue_inclusion_radius, projector_approximation_error
+export newton_kantorovich_error
+export certify_eigenvalue_lift, verify_spectral_gap
+
+# Re-export BallArithmetic VBD types used in results
+export RigorousBlockSchurResult, MiyajimaVBDResult
+export rigorous_block_schur, miyajima_vbd
+export collatz_upper_bound_L2_opnorm
 
 end
