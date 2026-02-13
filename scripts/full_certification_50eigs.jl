@@ -279,16 +279,138 @@ for K_level in K_levels
     @info "  Certified $(length(newly_certified)) eigenvalues at K=$K_level, $(length(uncertified)) remaining."
 end
 
-# Summary
+# Summary of Float64 resolvent
+num_resolvent_f64 = count(r -> r.is_certified, resolvent_results)
+println()
+println("  Float64 resolvent certified: $num_resolvent_f64 / $NUM_EIGS")
+if !isempty(uncertified)
+    println("  Remaining for BigFloat: $(length(uncertified)) eigenvalues")
+end
+println()
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 1c: BigFloat Resolvent for remaining eigenvalues
+# ═══════════════════════════════════════════════════════════════════════════
+
+if !isempty(uncertified)
+    println("-"^80)
+    println("Phase 1c: BigFloat RESOLVENT for remaining eigenvalues")
+    println("-"^80)
+    println()
+
+    # Try BigFloat BallMatrix at increasing K: K=256 (fast), then K=512 if needed.
+    # K=128 could also work but we might not have it cached in BigFloat.
+    bigfloat_K_candidates = [
+        (256, 512, "bigfloat_ball_matrix_K256_P512.jls"),
+        (K_HIGH, P_HIGH, "bigfloat_ball_matrix_K$(K_HIGH)_P$(P_HIGH).jls"),
+    ]
+
+    # Eigenvalue locations from BigFloat Schur at K_HIGH
+    cache_bf_spec = joinpath(CACHE_DIR, "bigfloat_spectral_K$(K_HIGH)_P$(P_HIGH).jls")
+    local bf_eigs_for_resolvent
+    if isfile(cache_bf_spec)
+        bf_spec = deserialize(cache_bf_spec)
+        bf_eigs_for_resolvent = bf_spec[:eigenvalues]
+    else
+        bf_eigs_for_resolvent = nothing
+        @warn "No BigFloat spectral results — using Float64 eigenvalue centers."
+    end
+
+    for (bf_K, bf_P, bf_filename) in bigfloat_K_candidates
+        if isempty(uncertified)
+            break
+        end
+
+        cache_bf = joinpath(CACHE_DIR, bf_filename)
+        if !isfile(cache_bf)
+            @info "  No BigFloat BallMatrix at K=$bf_K ($cache_bf), skipping."
+            continue
+        end
+
+        @info "Loading BigFloat BallMatrix at K=$bf_K (P=$bf_P)..."
+        bf_cached = deserialize(cache_bf)
+        A_bf_center = bf_cached[:A_bf]
+        A_bf_radius = bf_cached[:A_rad_bf]
+        A_ball_bf = BallMatrix(A_bf_center, A_bf_radius)
+        n_bf = size(A_bf_center, 1)
+        @info "  Loaded. Matrix size: $n_bf × $n_bf"
+
+        # Need ε_K for this BigFloat K
+        eps_K_bf = if haskey(eps_K_table, bf_K)
+            eps_K_table[bf_K]
+        else
+            @info "  Computing ε_K for K=$bf_K..."
+            eps_arb = compute_Δ(bf_K; N=N_SPLITTING)
+            _arb_to_float64_upper(eps_arb)
+        end
+        @printf("  ε_{%d} = %.6e\n", bf_K, eps_K_bf)
+
+        newly_certified_bf = Int[]
+        for i in copy(uncertified)
+            # Eigenvalue center
+            λ_center = if bf_eigs_for_resolvent !== nothing && i ≤ length(bf_eigs_for_resolvent)
+                Float64(bf_eigs_for_resolvent[i])
+            else
+                real(lambda_centers[i])
+            end
+            r_circle_bf = circle_radii[i]
+
+            @info "  j=$i: BigFloat resolvent at K=$bf_K, λ ≈ $(@sprintf("%.4e", λ_center)), r = $(@sprintf("%.4e", r_circle_bf))..."
+
+            local cert_bf, dt_bf
+            try
+                circle_bf = CertificationCircle(ComplexF64(λ_center), r_circle_bf; samples=CIRCLE_SAMPLES)
+                t_bf = time()
+                cert_bf = run_certification(A_ball_bf, circle_bf)
+                dt_bf = time() - t_bf
+            catch e
+                @warn "  j=$i: BigFloat resolvent failed at K=$bf_K: $(typeof(e))"
+                continue
+            end
+
+            resolvent_bf = Float64(cert_bf.resolvent_original)
+
+            # Small-gain check
+            alpha_bf = setrounding(Float64, RoundUp) do
+                eps_K_bf * resolvent_bf
+            end
+
+            if alpha_bf < 1.0
+                denom_bf = setrounding(Float64, RoundDown) do
+                    1.0 - alpha_bf
+                end
+                M_inf_bf = setrounding(Float64, RoundUp) do
+                    resolvent_bf / denom_bf
+                end
+
+                resolvent_results[i] = ResolventResult(
+                    i, ComplexF64(λ_center), bf_K, r_circle_bf,
+                    resolvent_bf, alpha_bf, eps_K_bf, M_inf_bf, true)
+                push!(newly_certified_bf, i)
+
+                @printf("  j=%2d: CERTIFIED (BigFloat K=%d), α=%.4e, ‖R‖=%.4e, M_∞=%.4e [%.1fs]\n",
+                        i, bf_K, alpha_bf, resolvent_bf, M_inf_bf, dt_bf)
+            else
+                @printf("  j=%2d: FAILED (BigFloat K=%d), α=%.4e, ‖R‖=%.4e [%.1fs]\n",
+                        i, bf_K, alpha_bf, resolvent_bf, dt_bf)
+            end
+        end
+
+        filter!(i -> !(i in newly_certified_bf), uncertified)
+        @info "  BigFloat K=$bf_K: certified $(length(newly_certified_bf)), $(length(uncertified)) remaining."
+    end
+end
+
+# Final resolvent summary
 num_resolvent_certified = count(r -> r.is_certified, resolvent_results)
 println()
 println("="^80)
 println("PHASE 1 SUMMARY")
 println("="^80)
-println("  Resolvent certified: $num_resolvent_certified / $NUM_EIGS")
+println("  Resolvent certified (Float64): $num_resolvent_f64 / $NUM_EIGS")
+println("  Resolvent certified (total):   $num_resolvent_certified / $NUM_EIGS")
 if !isempty(uncertified)
     println("  UNCERTIFIED eigenvalues: $uncertified")
-    println("  These need higher K or deflation.")
 end
 println()
 
@@ -301,22 +423,30 @@ println("PHASE 1b: TAIL BOUND")
 println("="^80)
 println()
 
-# Use the K=K_MAX_RESOLVENT matrix for the tail circle
-# The circle separates |λ_{NUM_EIGS}| from |λ_{NUM_EIGS+1}|
-λ_N   = lambda_centers[NUM_EIGS]
-λ_Np1 = if NUM_EIGS + 1 ≤ length(λ_all)
-    ComplexF64(λ_all[sorted_idx_global[NUM_EIGS + 1]])
+# Strategy: use a separating circle around the RESOLVENT-CERTIFIED eigenvalues.
+# For eigenvalues beyond the Float64 precision limit (~10^{-16}), resolvent
+# certification in Float64 BallArithmetic is impossible. Instead:
+#   - Tail bound separates the first N_res eigenvalues from the rest
+#   - Eigenvalues beyond N_res are bounded via BigFloat Bauer-Fike (Phase 4)
+
+N_resolvent = count(r -> r.is_certified, resolvent_results)
+
+# Find the separating circle: between |λ_{N_res}| and |λ_{N_res+1}|
+λ_tail_inner = lambda_centers[N_resolvent]
+λ_tail_outer = if N_resolvent + 1 ≤ length(λ_all)
+    ComplexF64(λ_all[sorted_idx_global[N_resolvent + 1]])
 else
     ComplexF64(0.0)
 end
-abs_λ_N   = abs(λ_N)
-abs_λ_Np1 = abs(λ_Np1)
-ρ_tail = (abs_λ_N + abs_λ_Np1) / 2.0
+abs_λ_inner = abs(λ_tail_inner)
+abs_λ_outer = abs(λ_tail_outer)
+ρ_tail = (abs_λ_inner + abs_λ_outer) / 2.0
 
-@printf("  |λ_%d| = %.6e,  |λ_%d| = %.6e\n", NUM_EIGS, abs_λ_N, NUM_EIGS+1, abs_λ_Np1)
+@printf("  Separating first %d resolvent-certified eigenvalues\n", N_resolvent)
+@printf("  |λ_%d| = %.6e,  |λ_%d| = %.6e\n", N_resolvent, abs_λ_inner, N_resolvent+1, abs_λ_outer)
 @printf("  Tail circle radius ρ = %.6e\n", ρ_tail)
 @printf("  Gap to λ_%d: %.6e,  gap to λ_%d: %.6e\n",
-        NUM_EIGS, abs_λ_N - ρ_tail, NUM_EIGS+1, ρ_tail - abs_λ_Np1)
+        N_resolvent, abs_λ_inner - ρ_tail, N_resolvent+1, ρ_tail - abs_λ_outer)
 println()
 
 # Adaptive: try increasing K until tail resolvent certifies
@@ -325,16 +455,28 @@ tail_resolvent_Ak = Inf
 tail_M_inf = Inf
 tail_alpha = Inf
 tail_K = 0
+tail_N_separated = N_resolvent
 for K_level in K_levels
     cache_k = joinpath(CACHE_DIR, "ball_matrix_K$(K_level).jls")
+    if !isfile(cache_k)
+        @warn "  No cached BallMatrix at K=$K_level, skipping."
+        continue
+    end
     A_ball_k = deserialize(cache_k)
     eps_K = eps_K_table[K_level]
 
     @info "Tail bound: trying K=$K_level..."
     circle_tail = CertificationCircle(ComplexF64(0.0), ρ_tail; samples=CIRCLE_SAMPLES)
-    t0 = time()
-    cert_tail = run_certification(A_ball_k, circle_tail)
-    dt = time() - t0
+
+    local cert_tail, dt_tail
+    try
+        t_tail = time()
+        cert_tail = run_certification(A_ball_k, circle_tail)
+        dt_tail = time() - t_tail
+    catch e
+        @warn "  Tail resolvent failed at K=$K_level: $(typeof(e))"
+        continue
+    end
 
     global tail_resolvent_Ak = cert_tail.resolvent_original
     global tail_alpha = setrounding(Float64, RoundUp) do
@@ -352,19 +494,74 @@ for K_level in K_levels
         global tail_certified = true
 
         @printf("  CERTIFIED at K=%d: α=%.4e, ‖R‖=%.4f, M_∞=%.4f [%.1fs]\n",
-                K_level, tail_alpha, tail_resolvent_Ak, tail_M_inf, dt)
+                K_level, tail_alpha, tail_resolvent_Ak, tail_M_inf, dt_tail)
         break
     else
         @printf("  FAILED at K=%d: α=%.4e, ‖R‖=%.4f [%.1fs]\n",
-                K_level, tail_alpha, tail_resolvent_Ak, dt)
+                K_level, tail_alpha, tail_resolvent_Ak, dt_tail)
+    end
+end
+
+if !tail_certified
+    # Try BigFloat BallMatrix for the tail bound: K=256 first, then K=512
+    for (bf_K, bf_P, bf_filename) in [
+            (256, 512, "bigfloat_ball_matrix_K256_P512.jls"),
+            (K_HIGH, P_HIGH, "bigfloat_ball_matrix_K$(K_HIGH)_P$(P_HIGH).jls")]
+        if tail_certified
+            break
+        end
+        cache_bf_tail = joinpath(CACHE_DIR, bf_filename)
+        if !isfile(cache_bf_tail)
+            continue
+        end
+
+        @info "Tail bound: trying BigFloat BallMatrix at K=$bf_K..."
+        bf_cached_tail = deserialize(cache_bf_tail)
+        A_ball_bf_tail = BallMatrix(bf_cached_tail[:A_bf], bf_cached_tail[:A_rad_bf])
+
+        eps_K_tail = if haskey(eps_K_table, bf_K)
+            eps_K_table[bf_K]
+        else
+            _arb_to_float64_upper(compute_Δ(bf_K; N=N_SPLITTING))
+        end
+
+        circle_tail_bf = CertificationCircle(ComplexF64(0.0), ρ_tail; samples=CIRCLE_SAMPLES)
+        try
+            t_tail_bf = time()
+            cert_tail_bf = run_certification(A_ball_bf_tail, circle_tail_bf)
+            dt_tail_bf = time() - t_tail_bf
+
+            global tail_resolvent_Ak = Float64(cert_tail_bf.resolvent_original)
+            global tail_alpha = setrounding(Float64, RoundUp) do
+                eps_K_tail * tail_resolvent_Ak
+            end
+
+            if tail_alpha < 1.0
+                denom = setrounding(Float64, RoundDown) do
+                    1.0 - tail_alpha
+                end
+                global tail_M_inf = setrounding(Float64, RoundUp) do
+                    tail_resolvent_Ak / denom
+                end
+                global tail_K = bf_K
+                global tail_certified = true
+
+                @printf("  CERTIFIED (BigFloat K=%d): α=%.4e, ‖R‖=%.4e, M_∞=%.4e [%.1fs]\n",
+                        bf_K, tail_alpha, tail_resolvent_Ak, tail_M_inf, dt_tail_bf)
+            else
+                @printf("  BigFloat tail FAILED at K=%d: α=%.4e [%.1fs]\n", bf_K, tail_alpha, dt_tail_bf)
+            end
+        catch e
+            @warn "  BigFloat tail resolvent failed at K=$bf_K: $(typeof(e))"
+        end
     end
 end
 
 if tail_certified
     @printf("\n  Tail bound: ‖R_%d(n)‖₂ ≤ ρ^{n+1} · M_∞ = %.6e^{n+1} · %.6e\n",
-            NUM_EIGS, ρ_tail, tail_M_inf)
+            tail_N_separated, ρ_tail, tail_M_inf)
 else
-    @warn "Tail bound FAILED at all K levels."
+    @warn "Tail bound FAILED at all K levels including BigFloat."
 end
 println()
 
