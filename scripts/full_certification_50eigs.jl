@@ -262,6 +262,30 @@ for K_level in K_levels
         end
 
         circle = CertificationCircle(λ_center_k, r_circle; samples=CIRCLE_SAMPLES)
+
+        # Pre-check: try a single serial SVD evaluation at one point on the circle
+        # to verify this K has enough precision. This avoids the distributed hang
+        # when svdbox(T - z*I) produces Balls containing zero.
+        S_schur, _, _, _, _ = sd_k
+        bT_check = BallMatrix(S_schur.T)
+        z_check = λ_center_k + r_circle  # one point on the circle (real direction)
+        pre_check_ok = true
+        try
+            svd_val = svd_bound_L2_opnorm(bT_check - z_check * I)
+            if mid(svd_val) ≈ 0.0 || rad(svd_val) > abs(mid(svd_val))
+                @printf("  j=%2d: PRE-CHECK FAILED at K=%d (svdbox imprecise: mid=%.2e, rad=%.2e)\n",
+                        i, K_level, mid(svd_val), rad(svd_val))
+                pre_check_ok = false
+            end
+        catch e
+            @printf("  j=%2d: PRE-CHECK FAILED at K=%d (%s)\n", i, K_level, typeof(e))
+            pre_check_ok = false
+        end
+        if !pre_check_ok
+            last_alpha = Inf  # skip remaining at this K
+            continue
+        end
+
         t1 = time()
 
         local cert_data
