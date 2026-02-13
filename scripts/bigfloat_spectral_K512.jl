@@ -358,3 +358,54 @@ println()
 println("="^80)
 println("DONE")
 println("="^80)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Export portable text files for Harvard Dataverse
+# ═══════════════════════════════════════════════════════════════════════
+@info "Exporting portable text files for Dataverse..."
+
+# --- Eigenvalues + ℓ_j(1) with full BigFloat precision ---
+txt_file = joinpath(CACHE_DIR, "spectral_coefficients_K$(K)_P$(PRECISION).txt")
+open(txt_file, "w") do io
+    println(io, "# GKW operator spectral expansion coefficients")
+    println(io, "# K = $K, BigFloat precision = $PRECISION bits (≈$(round(Int, PRECISION * log10(2))) decimal digits)")
+    println(io, "# ||E|| = ||A_true - QTQ'||_2 ≤ ", string(E_bound))
+    println(io, "# ||A_rad||_2 ≤ ", string(A_rad_opnorm))
+    println(io, "# ||A_bf - QTQ'||_2 ≤ ", string(res_opnorm))
+    println(io, "# ||Q'Q - I||_2 ≤ ", string(orth_def))
+    println(io, "# NK correction: NOT applied (to be added in post-processing)")
+    println(io, "#")
+    println(io, "# Columns: j, lambda_j (BigFloat string), ell_j(1) (BigFloat string), radius (BigFloat string), certified (YES/NO)")
+    println(io, "#")
+    for j in 1:NUM_EIGS
+        sign_ok = abs(ell_center[j]) > ell_radius[j] ? "YES" : "NO"
+        println(io, j, "\t", string(eigenvalues_out[j]), "\t", string(ell_center[j]), "\t", string(ell_radius[j]), "\t", sign_ok)
+    end
+end
+@info "  Written: $txt_file"
+
+# --- Eigenvector coefficients (full precision) ---
+vec_file = joinpath(CACHE_DIR, "eigenvectors_K$(K)_P$(PRECISION).txt")
+open(vec_file, "w") do io
+    println(io, "# GKW operator eigenvector coefficients in shifted monomial basis {(x-1)^k}")
+    println(io, "# K = $K, BigFloat precision = $PRECISION bits")
+    println(io, "# Each column j contains [v_j]_k for k = 0, 1, ..., $K")
+    println(io, "# Eigenvectors have unit ℓ² norm")
+    println(io, "#")
+    println(io, "# Header: j values")
+    print(io, "k")
+    for j in 1:NUM_EIGS
+        print(io, "\tv_", j)
+    end
+    println(io)
+    for k in 0:K
+        print(io, k)
+        for j in 1:NUM_EIGS
+            print(io, "\t", string(BigFloat(eigenvectors_out[k+1, j])))
+        end
+        println(io)
+    end
+end
+@info "  Written: $vec_file"
+
+@info "Export complete."
