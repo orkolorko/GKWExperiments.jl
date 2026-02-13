@@ -80,10 +80,11 @@ C2_float = _arb_to_float64_upper(C2_arb)
 
 # Precompute ε_K for all K values we might use
 K_values = Int[]
-K_cur = K_START
-while K_cur ≤ K_MAX_RESOLVENT
-    push!(K_values, K_cur)
-    K_cur *= 2
+let K_cur = K_START
+    while K_cur ≤ K_MAX_RESOLVENT
+        push!(K_values, K_cur)
+        K_cur *= 2
+    end
 end
 push!(K_values, K_HIGH)
 K_values = sort(unique(K_values))
@@ -320,7 +321,10 @@ println()
 
 # Adaptive: try increasing K until tail resolvent certifies
 tail_certified = false
-local tail_resolvent_Ak, tail_M_inf, tail_alpha, tail_K
+tail_resolvent_Ak = Inf
+tail_M_inf = Inf
+tail_alpha = Inf
+tail_K = 0
 for K_level in K_levels
     cache_k = joinpath(CACHE_DIR, "ball_matrix_K$(K_level).jls")
     A_ball_k = deserialize(cache_k)
@@ -332,8 +336,8 @@ for K_level in K_levels
     cert_tail = run_certification(A_ball_k, circle_tail)
     dt = time() - t0
 
-    tail_resolvent_Ak = cert_tail.resolvent_original
-    tail_alpha = setrounding(Float64, RoundUp) do
+    global tail_resolvent_Ak = cert_tail.resolvent_original
+    global tail_alpha = setrounding(Float64, RoundUp) do
         eps_K * tail_resolvent_Ak
     end
 
@@ -341,11 +345,11 @@ for K_level in K_levels
         denom = setrounding(Float64, RoundDown) do
             1.0 - tail_alpha
         end
-        tail_M_inf = setrounding(Float64, RoundUp) do
+        global tail_M_inf = setrounding(Float64, RoundUp) do
             tail_resolvent_Ak / denom
         end
-        tail_K = K_level
-        tail_certified = true
+        global tail_K = K_level
+        global tail_certified = true
 
         @printf("  CERTIFIED at K=%d: α=%.4e, ‖R‖=%.4f, M_∞=%.4f [%.1fs]\n",
                 K_level, tail_alpha, tail_resolvent_Ak, tail_M_inf, dt)
@@ -556,7 +560,7 @@ for i in 1:NUM_EIGS
 
     is_full = rr.is_certified && nk.is_certified && tr.transfer_valid
     if is_full
-        num_fully_certified += 1
+        global num_fully_certified += 1
     end
 
     # ℓ_j(1) from BigFloat if available
