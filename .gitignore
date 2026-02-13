@@ -3,3 +3,17 @@
 *.jl.mem
 /docs/Manifest*.toml
 /docs/build/
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+
+# Binary data files
+*.jld2
+*.jls

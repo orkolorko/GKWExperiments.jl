@@ -8,4 +8,7 @@ using Test
     include("TestCertifScripts.jl")
     include("TestEigenspaceCertification.jl")
     include("TestInfiniteDimensionalLift.jl")
+    include("TestDeflationCertification.jl")
+    include("TestNewtonKantorovichCertification.jl")
+    include("TestTwoStageCertification.jl")
 end

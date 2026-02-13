@@ -43,7 +43,19 @@ end
 struct EigenvectorCertificationEntry
     cluster_idx::Int
     schur_vector_norm::Float64             # ‖Q[:, cluster]‖
-    eigenvector_error_bound::Float64       # From NK bound
+    eigenvector_error_bound::Float64       # From resolvent lift bound
+end
+
+struct NKRefinementEntry
+    cluster_idx::Int
+    nk_radius::Float64                     # r_NK from Newton–Kantorovich
+    nk_eigenvalue_radius::Float64
+    nk_eigenvector_radius::Float64
+    qk_bound::Float64
+    q0_bound::Float64
+    y_bound::Float64
+    discriminant::Float64
+    is_certified::Bool
 end
 
 struct EigenvalueCertificationEntry
@@ -69,6 +81,7 @@ struct FullCertificationLog
     eigenvalue_entries::Vector{EigenvalueCertificationEntry}
     projection_entries::Vector{ProjectionCertificationEntry}
     eigenvector_entries::Vector{EigenvectorCertificationEntry}
+    nk_entries::Vector{NKRefinementEntry}
 end
 
 function Base.show(io::IO, log::FullCertificationLog)
@@ -116,6 +129,23 @@ function Base.show(io::IO, log::FullCertificationLog)
         println(io, "Cluster $(entry.cluster_idx):")
         println(io, "  Schur vector norm: $(entry.schur_vector_norm)")
         println(io, "  Eigenvector error bound: $(entry.eigenvector_error_bound)")
+    end
+
+    if !isempty(log.nk_entries)
+        println(io)
+        println(io, "NEWTON–KANTOROVICH REFINEMENT (Stage 2):")
+        println(io, "-"^70)
+
+        for entry in log.nk_entries
+            status = entry.is_certified ? "CERTIFIED" : "FAILED"
+            println(io, "Eigenvalue $(entry.cluster_idx):")
+            println(io, "  NK enclosure radius r_NK = $(entry.nk_radius)")
+            println(io, "  Discrete defect q_k = $(entry.qk_bound)")
+            println(io, "  Infinite-dim defect q₀ = $(entry.q0_bound)")
+            println(io, "  Residual bound y = $(entry.y_bound)")
+            println(io, "  Discriminant = $(entry.discriminant)")
+            println(io, "  Status: $status")
+        end
     end
 
     println(io, "="^70)
@@ -215,6 +245,45 @@ for idx in 1:eigenvalues_to_certify
     end
 end
 
+# ## Step 4: Newton–Kantorovich Refinement (Stage 2)
+#
+# For eigenvalues certified by the resolvent method (Stage 1), we now
+# apply the direct NK argument to obtain much tighter enclosure radii.
+
+@info "Running Newton–Kantorovich refinement (Stage 2)..."
+
+nk_entries = NKRefinementEntry[]
+
+for idx in 1:eigenvalues_to_certify
+    entry = eigenvalue_entries[idx]
+    if !entry.is_certified
+        @warn "  Skipping eigenvalue $idx (not certified by resolvent method)"
+        continue
+    end
+
+    @info "  NK refinement for eigenvalue $idx: λ ≈ $(entry.eigenvalue_center)"
+    nk_result = certify_eigenpair_nk(s; K=K, r=r, target_idx=idx, N_C2=N_splitting)
+
+    push!(nk_entries, NKRefinementEntry(
+        idx,
+        nk_result.enclosure_radius,
+        nk_result.eigenvalue_radius,
+        nk_result.eigenvector_radius,
+        nk_result.qk_bound,
+        nk_result.q0_bound,
+        nk_result.y_bound,
+        nk_result.discriminant,
+        nk_result.is_certified
+    ))
+
+    if nk_result.is_certified
+        improvement = entry.eigenvalue_radius / nk_result.enclosure_radius
+        @info "  NK CERTIFIED: r_NK = $(nk_result.enclosure_radius) ($(round(improvement, sigdigits=3))× tighter)"
+    else
+        @warn "  NK FAILED (q₀ = $(nk_result.q0_bound), disc = $(nk_result.discriminant))"
+    end
+end
+
 # ## Create Full Certification Log
 
 cert_log = FullCertificationLog(
@@ -227,7 +296,8 @@ cert_log = FullCertificationLog(
     finite_result.block_schur.orthogonality_defect,
     eigenvalue_entries,
     projection_entries,
-    eigenvector_entries
+    eigenvector_entries,
+    nk_entries
 )
 
 # ## Display Results
@@ -480,24 +550,52 @@ println("\nPlot saved to scripts/Lk_iterates.png")
 
 fig
 
+# ## Method Comparison: Resolvent Bridge vs Newton–Kantorovich
+#
+# Stage 1 (resolvent bridge) proves simplicity via contour integration.
+# Stage 2 (NK) refines the enclosure radius using the eigenpair map directly.
+
+println()
+println("="^70)
+println("METHOD COMPARISON: RESOLVENT BRIDGE vs NEWTON–KANTOROVICH")
+println("="^70)
+println()
+
+for nk_entry in nk_entries
+    idx = nk_entry.cluster_idx
+    resolvent_entry = eigenvalue_entries[idx]
+    λ = resolvent_entry.eigenvalue_center
+
+    println("Eigenvalue $idx: λ ≈ $(round(real(λ), sigdigits=10))")
+    println("  Resolvent radius: $(resolvent_entry.eigenvalue_radius)")
+    println("  NK radius:        $(nk_entry.nk_radius)")
+    if nk_entry.is_certified && resolvent_entry.is_certified
+        improvement = resolvent_entry.eigenvalue_radius / nk_entry.nk_radius
+        println("  Improvement:      $(round(improvement, sigdigits=3))×")
+    end
+    println()
+end
+
 # ## Hardcoded Reference Results (for K=16, s=1)
 #
 # These are the expected results for the classical GKW operator:
 #
 # **Eigenvalue 1** (Perron-Frobenius):
 # - λ₁ ≈ 1.0
-# - Certified radius ≈ 0.102 (determined by truncation error)
+# - Certified radius ≈ 0.102 (determined by truncation error via resolvent)
+# - NK radius gives much tighter enclosure
 # - (P₁ · 1)[1] ≈ 0.789 (projection of 1 onto eigenspace of λ=1)
 #
 # **Eigenvalue 2** (Wirsing constant):
 # - λ₂ ≈ -0.3036630029...
-# - Certified radius ≈ 0.102
+# - Certified radius ≈ 0.102 (resolvent), much tighter via NK
 # - (P₂ · 1)[1] ≈ 0.211 gives the component of 1 in the second eigenspace
+#
+# **Two-Stage Pipeline:**
+# Stage 1 (resolvent bridge): proves eigenvalue simplicity inside a contour
+# Stage 2 (NK refinement): tightens enclosure via defect-based argument
 #
 # **Spectral Expansion:**
 # L^n · 1 ≈ λ₁ⁿ P₁(1) + λ₂ⁿ P₂(1) + ... (higher eigenspaces)
-#
-# The projection coefficients are essential for applications like
-# computing correlation decay rates and mixing properties.
 
 cert_log

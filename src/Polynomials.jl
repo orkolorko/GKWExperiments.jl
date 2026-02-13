@@ -9,7 +9,7 @@ module Polynomials
 
 using BallArithmetic.CertifScripts: polyconv
 
-export polyconv, polyval, poly_scale, polypow
+export polyconv, polyval, polyval_derivative, poly_scale, polypow
 export deflation_polynomial, coeffs_about_c_from_about_0, coeffs_about_0_from_about_c
 
 """
@@ -27,6 +27,35 @@ function polyval(coeffs::AbstractVector, x)
         result = result * x + T(coeffs[i])
     end
     return result
+end
+
+"""
+    polyval_derivative(coeffs, x)
+
+Evaluate the polynomial `p(x)` and its derivative `p'(x)` simultaneously
+using a single Horner pass.
+
+`coeffs = [a₀, a₁, ..., aₙ]` represents p(x) = a₀ + a₁x + ... + aₙxⁿ.
+
+Returns `(p_val, dp_val)`.
+"""
+function polyval_derivative(coeffs::AbstractVector, x)
+    n = length(coeffs)
+    T = promote_type(eltype(coeffs), typeof(x))
+    if n == 0
+        z = zero(T)
+        return z, z
+    end
+    if n == 1
+        return T(coeffs[1]), zero(T)
+    end
+    p = T(coeffs[end])
+    dp = zero(T)
+    @inbounds for i in (n - 1):-1:1
+        dp = dp * x + p
+        p = p * x + T(coeffs[i])
+    end
+    return p, dp
 end
 
 """

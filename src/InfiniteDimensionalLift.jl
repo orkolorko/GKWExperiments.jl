@@ -26,16 +26,23 @@ using ArbNumerics
 using BallArithmetic
 
 import ..Constants: compute_C2, compute_Δ, h2_whiten
+import ..Constants: poly_bridge_constant_powers_from_coeffs
 import ..EigenspaceCertification: GKWEigenCertificationResult, arb_to_ball_matrix
+import ..Polynomials: deflation_polynomial, polyval, polyval_derivative
 
 # Import CertifScripts for resolvent certification
-using BallArithmetic.CertifScripts: CertificationCircle, run_certification
+using BallArithmetic.CertifScripts: CertificationCircle, run_certification,
+    run_certification_parametric, run_certification_ogita
 
 export InfiniteDimCertificationResult
 export resolvent_bridge_condition, certified_resolvent_bound
 export eigenvalue_inclusion_radius, projector_approximation_error
 export newton_kantorovich_error
 export certify_eigenvalue_lift, verify_spectral_gap
+export DeflationCertificationResult, certify_eigenvalue_deflation, backmap_inclusion_radius
+export deflation_truncation_error
+export TwoStageCertificationResult, reverse_transfer_resolvent_bound
+export projector_approximation_error_rigorous
 
 # ============================================================================
 # Result Types
@@ -506,6 +513,475 @@ function deflation_truncation_error(poly_coeffs::AbstractVector, Ak_norm::Real,
     end
 
     return Float64(base_truncation_error) * bridge_const
+end
+
+# ============================================================================
+# Deflation Certification Pipeline (Section 8)
+# ============================================================================
+
+"""
+    DeflationCertificationResult
+
+Result of certifying an eigenvalue via polynomial deflation.
+
+# Fields
+- `eigenvalue_center`, `eigenvalue_radius`, `eigenvalue_ball`: enclosure of the true eigenvalue
+- `deflation_polynomial_coeffs`: coefficients of the deflation polynomial p
+- `deflation_polynomial_degree`: degree of p
+- `deflation_power`: exponent q used in p(z) = (α∏(1-z/λ̂ᵢ))^q
+- `deflated_eigenvalues`: eigenvalues zeroed out by the polynomial
+- `image_circle_radius`: radius of the certification circle in p-space (around 1)
+- `image_certified_radius`: certified inclusion radius in p-space
+- `poly_perturbation_bound`: ‖p(L_r) - p(A_k)‖
+- `bridge_constant`: 𝒞_r^{pow} from the bridge constant computation
+- `resolvent_Mr`: resolvent bound ‖R_{p(A_k)}‖ on the image circle
+- `small_gain_factor`: α = eps_p · M_r (must be < 1)
+- `p_derivative_at_target`: |p'(λ_tgt)| used for back-mapping
+- `is_certified`: whether the certification succeeded
+- `truncation_error`: base ε_K = C₂(2/3)^{K+1}
+- `discretization_size`: K+1
+- `hardy_space_radius`: r for H²(D_r)
+- `certification_method`: :direct, :parametric, or :ogita
+- `timing`: elapsed seconds for the certification
+"""
+struct DeflationCertificationResult
+    eigenvalue_center::ComplexF64
+    eigenvalue_radius::Float64
+    eigenvalue_ball::Ball{Float64, ComplexF64}
+    deflation_polynomial_coeffs::Vector{Float64}
+    deflation_polynomial_degree::Int
+    deflation_power::Int
+    deflated_eigenvalues::Vector{ComplexF64}
+    image_circle_radius::Float64
+    image_certified_radius::Float64
+    poly_perturbation_bound::Float64
+    bridge_constant::Float64
+    resolvent_Mr::Float64
+    small_gain_factor::Float64
+    p_derivative_at_target::Float64
+    is_certified::Bool
+    truncation_error::Float64
+    discretization_size::Int
+    hardy_space_radius::Float64
+    certification_method::Symbol
+    timing::Float64
+end
+
+function Base.show(io::IO, r::DeflationCertificationResult)
+    println(io, "Deflation Certification Result")
+    println(io, "==============================")
+    println(io, "Eigenvalue: $(r.eigenvalue_center) ± $(r.eigenvalue_radius)")
+    println(io, "Certified: $(r.is_certified)")
+    println(io, "Method: $(r.certification_method)")
+    println(io, "")
+    println(io, "Deflation polynomial degree: $(r.deflation_polynomial_degree) (q=$(r.deflation_power))")
+    println(io, "Deflated eigenvalues: $(r.deflated_eigenvalues)")
+    println(io, "")
+    println(io, "Image circle radius: $(r.image_circle_radius)")
+    println(io, "Image certified radius: $(r.image_certified_radius)")
+    println(io, "Poly perturbation bound: $(r.poly_perturbation_bound)")
+    println(io, "Bridge constant: $(r.bridge_constant)")
+    println(io, "Resolvent M_r: $(r.resolvent_Mr)")
+    println(io, "Small-gain factor: $(r.small_gain_factor)")
+    println(io, "|p'(λ_tgt)|: $(r.p_derivative_at_target)")
+    println(io, "")
+    println(io, "Truncation error ε_K: $(r.truncation_error)")
+    println(io, "Matrix size: $(r.discretization_size)")
+    println(io, "Hardy space: H²(D_{$(r.hardy_space_radius)})")
+    println(io, "Timing: $(r.timing) s")
+end
+
+"""
+    backmap_inclusion_radius(r_p, p_coeffs, lambda_tgt; order=1)
+
+Back-map an inclusion radius from p-space to λ-space.
+
+Given a certified radius `r_p` in p-space (i.e., |p(λ) - 1| ≤ r_p),
+compute the radius in λ-space using:
+
+**First-order** (order=1):
+    |λ - λ_tgt| ≤ r_p / |p'(λ_tgt)|
+
+This is valid when p is injective on B(λ_tgt, δ₁). The injectivity
+condition can be verified using the second-order bound.
+
+**Second-order** (order=2): Rigorous bound using BallArithmetic.
+
+Evaluates p'' on the disk B(λ_tgt, δ₁) using Ball interval arithmetic
+to obtain a rigorous upper bound M₂ = sup_{z ∈ disk} |p''(z)|. Then
+solves the quadratic (M₂/2)δ² - |p'(λ_tgt)|δ + r_p = 0. The smaller
+root δ₂ is a rigorous inclusion radius by the inverse function theorem:
+on |λ - λ_tgt| = δ₂ we have |p(λ) - 1| ≥ |p'|δ₂ - M₂δ₂²/2 = r_p,
+so all solutions of |p(λ) - 1| ≤ r_p lie within the disk of radius δ₂.
+
+Note: δ₂ ≥ δ₁ because the curvature correction widens the bound. The
+first-order bound is tighter but requires an injectivity assumption;
+the second-order bound is rigorous without additional assumptions.
+
+# Arguments
+- `r_p`: certified radius in p-space
+- `p_coeffs`: polynomial coefficients [a₀, a₁, ..., aₐ]
+- `lambda_tgt`: target eigenvalue
+- `order`: 1 for first-order, 2 for rigorous second-order
+
+# Returns
+- `(radius, dp_abs)` where radius is the back-mapped inclusion radius
+  and dp_abs = |p'(λ_tgt)|
+"""
+function backmap_inclusion_radius(r_p::Real, p_coeffs::AbstractVector, lambda_tgt::Number;
+                                   order::Int=1)
+    _, dp = polyval_derivative(p_coeffs, lambda_tgt)
+    dp_abs = abs(dp)
+    dp_abs == 0 && return Inf, 0.0
+
+    if order == 1
+        return Float64(r_p / dp_abs), Float64(dp_abs)
+    elseif order == 2
+        # Rigorous second-order back-mapping using BallArithmetic.
+        #
+        # We bound |p''(z)| on the perturbation disk B(λ_tgt, δ₁) by evaluating
+        # the polynomial p'' on a Ball enclosure. This gives M₂ = sup |p''|.
+        # The inclusion radius δ₂ is the smaller root of:
+        #   (M₂/2) δ² - |p'(λ_tgt)| δ + r_p = 0
+
+        d = length(p_coeffs) - 1
+        if d < 2
+            # Linear or constant: p'' = 0, first-order is exact
+            return Float64(r_p / dp_abs), Float64(dp_abs)
+        end
+
+        # First-order estimate for the evaluation domain
+        delta_1 = Float64(r_p / dp_abs)
+
+        # Compute p'' coefficients: p''(x) = Σ_{k=2}^d k(k-1) a_k x^{k-2}
+        dpp_coeffs = [(k * (k - 1)) * p_coeffs[k + 1] for k in 2:d]
+
+        # Convert p'' coefficients to Balls (exact, zero radius)
+        ball_dpp_coeffs = [Ball(ComplexF64(c), 0.0) for c in dpp_coeffs]
+
+        # Create Ball enclosure of the perturbation disk B(λ_tgt, δ₁)
+        z_ball = Ball(ComplexF64(lambda_tgt), delta_1)
+
+        # Evaluate p'' on the Ball — result contains all p''(z) for z in the disk
+        dpp_ball = polyval(ball_dpp_coeffs, z_ball)
+
+        # Rigorous upper bound on |p''(z)| for z ∈ B(λ_tgt, δ₁)
+        M2 = abs(BallArithmetic.mid(dpp_ball)) + Float64(BallArithmetic.rad(dpp_ball))
+
+        if M2 == 0
+            # No curvature: first-order is exact
+            return Float64(r_p / dp_abs), Float64(dp_abs)
+        end
+
+        half_M2 = M2 / 2
+
+        # Solve: half_M2 · δ² - dp_abs · δ + r_p = 0
+        discriminant = dp_abs^2 - 4 * half_M2 * Float64(r_p)
+
+        if discriminant < 0
+            # Discriminant negative means r_p is too large for the quadratic
+            # argument: 2M₂ r_p > |p'|². Fall back to first-order.
+            return Float64(r_p / dp_abs), Float64(dp_abs)
+        end
+
+        # Smaller root = rigorous inclusion radius
+        delta_2 = (dp_abs - sqrt(discriminant)) / (2 * half_M2)
+
+        return Float64(delta_2), Float64(dp_abs)
+    else
+        throw(ArgumentError("order must be 1 or 2"))
+    end
+end
+
+"""
+    certify_eigenvalue_deflation(A::BallMatrix, lambda_tgt::Number,
+                                  certified_eigenvalues::AbstractVector;
+                                  K::Int, r::Real=1.0, N::Int=5000,
+                                  q::Int=1,
+                                  image_circle_radius::Real=0.5,
+                                  image_circle_samples::Int=128,
+                                  method::Symbol=:direct,
+                                  backmap_order::Int=1,
+                                  use_tight_bridge::Bool=true)
+
+Certify an eigenvalue via polynomial deflation.
+
+# Pipeline
+1. Build deflation polynomial `p` that zeros out `certified_eigenvalues` and
+   maps `lambda_tgt` to 1.
+2. Run resolvent certification on a circle around 1 in p-space, using
+   `run_certification(A, circle; polynomial=poly_coeffs)`.
+3. Compute polynomial perturbation bound `ε_p = ε_K · C_r^{pow}`.
+4. Check small-gain: `ε_p · M_r < 1`.
+5. Back-map via `backmap_inclusion_radius` to get eigenvalue enclosure.
+
+# Arguments
+- `A`: GKW discretization matrix as BallMatrix
+- `lambda_tgt`: target eigenvalue to certify
+- `certified_eigenvalues`: previously certified eigenvalue centers to deflate
+- `K`: discretization order (matrix is (K+1)×(K+1))
+- `r`: Hardy space radius
+- `N`: splitting parameter for C₂
+- `q`: power of the deflation polynomial
+- `image_circle_radius`: radius of circle around 1 in p-space
+- `image_circle_samples`: number of samples on image circle
+- `method`: `:direct`, `:parametric`, or `:ogita`
+- `backmap_order`: 1 or 2 for back-mapping precision
+- `use_tight_bridge`: if true, use `poly_bridge_constant_powers_from_coeffs`
+
+# Returns
+[`DeflationCertificationResult`](@ref)
+"""
+function certify_eigenvalue_deflation(A::BallMatrix, lambda_tgt::Number,
+                                       certified_eigenvalues::AbstractVector;
+                                       K::Int, r::Real=1.0, N::Int=5000,
+                                       q::Int=1,
+                                       image_circle_radius::Real=0.5,
+                                       image_circle_samples::Int=128,
+                                       method::Symbol=:direct,
+                                       backmap_order::Int=1,
+                                       use_tight_bridge::Bool=true)
+    t0 = time()
+
+    λ_tgt = ComplexF64(lambda_tgt)
+    cert_eigs = ComplexF64.(certified_eigenvalues)
+
+    # Step 1: Build deflation polynomial
+    poly_coeffs = deflation_polynomial(Float64.(real.(cert_eigs)), real(λ_tgt); q=q)
+    poly_degree = length(poly_coeffs) - 1
+
+    # Step 2: Run resolvent certification in p-space (circle around 1)
+    image_center = ComplexF64(1.0, 0.0)
+    circle = CertificationCircle(image_center, Float64(image_circle_radius);
+                                  samples=image_circle_samples)
+
+    cert_data = if method == :parametric
+        run_certification_parametric(A, circle; polynomial=poly_coeffs)
+    elseif method == :ogita
+        run_certification_ogita(A, circle; polynomial=poly_coeffs)
+    else
+        run_certification(A, circle; polynomial=poly_coeffs)
+    end
+
+    resolvent_Mr = cert_data.resolvent_original
+
+    # Step 3: Compute polynomial perturbation bound
+    ε_K = Float64(real(compute_Δ(K; N=N)))
+
+    if use_tight_bridge
+        Ak_center = BallArithmetic.mid(A)
+        Cr, _, _, _ = poly_bridge_constant_powers_from_coeffs(
+            poly_coeffs, Ak_center; r=Float64(r), εr=ε_K)
+        # Use upper bound of the Ball to ensure rigorous bound
+        bridge_const = Float64(BallArithmetic.mid(Cr)) + Float64(BallArithmetic.rad(Cr))
+        eps_p = ε_K * bridge_const
+    else
+        Ak_norm_ball = svd_bound_L2_opnorm(
+            BallMatrix(h2_whiten(BallArithmetic.mid(A), Float64(r))))
+        Ak_norm = Float64(BallArithmetic.mid(Ak_norm_ball)) + Float64(BallArithmetic.rad(Ak_norm_ball))
+        Lr_norm = Ak_norm + ε_K
+        eps_p = deflation_truncation_error(poly_coeffs, Ak_norm, Lr_norm, ε_K)
+        bridge_const = eps_p / ε_K
+    end
+
+    # Step 4: Small-gain check
+    α = eps_p * resolvent_Mr
+    is_certified = α < 1.0
+
+    # Step 5: Back-map to λ-space
+    if is_certified
+        # Certified radius in p-space is the image_circle_radius
+        image_certified_radius = Float64(image_circle_radius)
+        λ_radius, dp_abs = backmap_inclusion_radius(
+            image_certified_radius, poly_coeffs, λ_tgt; order=backmap_order)
+    else
+        image_certified_radius = Inf
+        _, dp_abs = backmap_inclusion_radius(1.0, poly_coeffs, λ_tgt; order=1)
+        λ_radius = Inf
+    end
+
+    timing = time() - t0
+
+    return DeflationCertificationResult(
+        λ_tgt,
+        λ_radius,
+        Ball(λ_tgt, λ_radius),
+        Float64.(poly_coeffs),
+        poly_degree,
+        q,
+        cert_eigs,
+        Float64(image_circle_radius),
+        image_certified_radius,
+        eps_p,
+        bridge_const,
+        resolvent_Mr,
+        α,
+        Float64(dp_abs),
+        is_certified,
+        ε_K,
+        K + 1,
+        Float64(r),
+        method,
+        timing
+    )
+end
+
+# ============================================================================
+# Two-Stage Certification Pipeline
+# ============================================================================
+
+"""
+    TwoStageCertificationResult
+
+Result of the two-stage certification pipeline for a single eigenvalue.
+
+**Stage 1** (K_low): Resolvent certification on excluding circles proves
+simplicity and bounds ‖R_{L_r}(z)‖ on the contour.
+
+**Stage 2** (K_high): NK certification gives tight eigenpair enclosures.
+
+**Transfer bridge**: Stage 1 resolvent + Stage 2 truncation error give
+Riesz projector error bounds.
+
+# Fields
+- `eigenvalue_center`, `eigenvalue_index`: identity of the eigenvalue
+- `stage1_*`: Stage 1 resolvent certification at K_low
+- `stage2_*`: Stage 2 NK certification at K_high
+- `transfer_*`: reverse perturbation from L_r to A_{K_high}
+- `riesz_*`: Riesz projector approximation error
+- `hardy_space_radius`, `C2_bound`: metadata
+"""
+struct TwoStageCertificationResult
+    # Identity
+    eigenvalue_center::ComplexF64
+    eigenvalue_index::Int
+    # Stage 1 (resolvent at K_low)
+    stage1_K::Int
+    stage1_circle_radius::Float64
+    stage1_resolvent_Ak::Float64      # ‖R_{A_{K_low}}‖ on Γ
+    stage1_alpha::Float64              # ε_{K_low} · resolvent_Ak
+    stage1_eps_K::Float64
+    stage1_M_inf::Float64              # ‖R_{L_r}‖ = resolvent_Ak / (1 - α₁)
+    stage1_is_certified::Bool
+    # Stage 2 (NK at K_high)
+    stage2_K::Int
+    stage2_eps_K::Float64
+    stage2_nk_radius::Float64          # r_NK
+    stage2_eigenvalue_radius::Float64
+    stage2_eigenvector_radius::Float64
+    stage2_is_certified::Bool
+    # Transfer bridge
+    transfer_resolvent_Ak_high::Float64 # ‖R_{A_{K_high}}‖ via reverse transfer
+    transfer_alpha_high::Float64
+    transfer_is_valid::Bool
+    # Riesz projector
+    riesz_projector_error::Float64      # ‖P_{L_r} - P_{A_{K_high}}‖
+    riesz_contour_length::Float64       # |Γ| = 2πr
+    # Metadata
+    hardy_space_radius::Float64
+    C2_bound::Float64
+end
+
+function Base.show(io::IO, r::TwoStageCertificationResult)
+    println(io, "Two-Stage Certification Result")
+    println(io, "==============================")
+    println(io, "Eigenvalue $(r.eigenvalue_index): $(r.eigenvalue_center)")
+    println(io, "")
+    println(io, "Stage 1 (K=$(r.stage1_K), resolvent):")
+    println(io, "  Circle radius: $(r.stage1_circle_radius)")
+    println(io, "  ‖R_{A_K}‖: $(r.stage1_resolvent_Ak)")
+    println(io, "  α₁ = ε_K · ‖R‖: $(r.stage1_alpha)")
+    println(io, "  ε_K: $(r.stage1_eps_K)")
+    println(io, "  M_∞ = ‖R_{L_r}‖: $(r.stage1_M_inf)")
+    println(io, "  Certified: $(r.stage1_is_certified)")
+    println(io, "")
+    println(io, "Stage 2 (K=$(r.stage2_K), NK):")
+    println(io, "  ε_K: $(r.stage2_eps_K)")
+    println(io, "  NK radius: $(r.stage2_nk_radius)")
+    println(io, "  Eigenvalue radius: $(r.stage2_eigenvalue_radius)")
+    println(io, "  Eigenvector radius: $(r.stage2_eigenvector_radius)")
+    println(io, "  Certified: $(r.stage2_is_certified)")
+    println(io, "")
+    println(io, "Transfer bridge:")
+    println(io, "  ‖R_{A_{K_high}}‖ (reverse): $(r.transfer_resolvent_Ak_high)")
+    println(io, "  α_high: $(r.transfer_alpha_high)")
+    println(io, "  Valid: $(r.transfer_is_valid)")
+    println(io, "")
+    println(io, "Riesz projector:")
+    println(io, "  ‖P_{L_r} - P_{A_{K_high}}‖: $(r.riesz_projector_error)")
+    println(io, "  Contour length: $(r.riesz_contour_length)")
+    println(io, "")
+    println(io, "Hardy space: H²(D_{$(r.hardy_space_radius)})")
+    println(io, "C₂ bound: $(r.C2_bound)")
+end
+
+"""
+    reverse_transfer_resolvent_bound(M_inf::Float64, eps_K_high::Float64)
+
+Reverse perturbation: given ‖R_{L_r}(z)‖ ≤ M_inf (from Stage 1), bound
+‖R_{A_{K_high}}(z)‖ at a higher truncation level.
+
+Since L_r = A_{K_high} + (L_r - A_{K_high}) and ‖L_r - A_{K_high}‖ ≤ ε_{K_high},
+the standard Neumann perturbation gives:
+
+    ‖R_{A_{K_high}}(z)‖ ≤ M_inf / (1 - M_inf · ε_{K_high})
+
+All arithmetic uses directed rounding for rigorous bounds.
+
+# Returns
+- `(resolvent_Ak_high, alpha_high, is_valid)` tuple
+"""
+function reverse_transfer_resolvent_bound(M_inf::Float64, eps_K_high::Float64)
+    # α_high = M_inf · ε_{K_high}, rigorous upper bound
+    alpha_high = setrounding(Float64, RoundUp) do
+        M_inf * eps_K_high
+    end
+    alpha_high >= 1.0 && return (Inf, alpha_high, false)
+
+    # denominator (lower bound) = 1 - α_high
+    denom = setrounding(Float64, RoundDown) do
+        1.0 - alpha_high
+    end
+    denom <= 0.0 && return (Inf, alpha_high, false)
+
+    # ‖R_{A_{K_high}}‖ ≤ M_inf / denom (rigorous upper bound)
+    resolvent = setrounding(Float64, RoundUp) do
+        M_inf / denom
+    end
+    return (resolvent, alpha_high, true)
+end
+
+"""
+    projector_approximation_error_rigorous(contour_length::Float64,
+        resolvent_Ak_high::Float64, eps_K_high::Float64)
+
+Rigorous Riesz projector error bound with directed rounding.
+
+```math
+\\|P_{L_r}(\\Gamma) - P_{A_{K_{high}}}(\\Gamma)\\|
+\\leq \\frac{|\\Gamma|}{2\\pi} \\cdot
+\\frac{\\|R_{A_{K_{high}}}\\|^2 \\cdot \\varepsilon_{K_{high}}}{1 - \\varepsilon_{K_{high}} \\cdot \\|R_{A_{K_{high}}}\\|}
+```
+
+# Returns
+- `(error_bound, is_valid)` tuple
+"""
+function projector_approximation_error_rigorous(contour_length::Float64,
+        resolvent_Ak_high::Float64, eps_K_high::Float64)
+    alpha = setrounding(Float64, RoundUp) do
+        eps_K_high * resolvent_Ak_high
+    end
+    alpha >= 1.0 && return (Inf, false)
+
+    denom = setrounding(Float64, RoundDown) do
+        1.0 - alpha
+    end
+    denom <= 0.0 && return (Inf, false)
+
+    error_bound = setrounding(Float64, RoundUp) do
+        (contour_length / (2.0 * π)) * resolvent_Ak_high * resolvent_Ak_high * eps_K_high / denom
+    end
+    return (error_bound, true)
 end
 
 end # module

@@ -58,7 +58,7 @@ export coeffs_from_boundary, build_Ls_matrix_arb, gkw_matrix_direct
 # Polynomial utilities for eigenvalue certification
 include("Polynomials.jl")
 using .Polynomials
-export polyconv, polyval, poly_scale, polypow
+export polyconv, polyval, polyval_derivative, poly_scale, polypow
 export deflation_polynomial, coeffs_about_c_from_about_0, coeffs_about_0_from_about_c
 
 # Eigenspace certification for GKW operator (uses BallArithmetic VBD)
@@ -75,6 +75,22 @@ export resolvent_bridge_condition, certified_resolvent_bound
 export eigenvalue_inclusion_radius, projector_approximation_error
 export newton_kantorovich_error
 export certify_eigenvalue_lift, verify_spectral_gap
+export DeflationCertificationResult, certify_eigenvalue_deflation, backmap_inclusion_radius
+export deflation_truncation_error
+export TwoStageCertificationResult, reverse_transfer_resolvent_bound
+export projector_approximation_error_rigorous
+
+# Newton-Kantorovich eigenpair certification (defect-based, single-space)
+include("NewtonKantorovichCertification.jl")
+using .NewtonKantorovichCertification
+export NKCertificationResult, certify_eigenpair_nk
+export assemble_eigenpair_jacobian, compute_nk_radius
+
+# Re-export BallArithmetic parametric/ogita certification
+using BallArithmetic.CertifScripts: run_certification_parametric, run_certification_ogita
+using BallArithmetic: config_v1, config_v2, config_v2p5, config_v3
+export run_certification_parametric, run_certification_ogita
+export config_v1, config_v2, config_v2p5, config_v3
 
 # Re-export BallArithmetic VBD types used in results
 export RigorousBlockSchurResult, MiyajimaVBDResult

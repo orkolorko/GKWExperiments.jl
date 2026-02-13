@@ -129,6 +129,7 @@ struct SpectralComponent
     index::Int
     eigenvalue::Complex{BigFloat}
     eigenvalue_radius::BigFloat
+    eigenvalue_nk_radius::BigFloat                    # NK-refined radius (tighter)
     projection_of_one::Vector{Complex{BigFloat}}      # Πᵢ(1) coefficients
     projection_of_one_radius::Vector{BigFloat}        # Rigorous radii
     projection_leading_coeff::Complex{BigFloat}       # [Πᵢ(1)]₀
@@ -137,6 +138,7 @@ struct SpectralComponent
     L2_norm_radius::BigFloat
     small_gain_alpha::Float64                         # Small-gain factor
     is_certified::Bool
+    nk_certified::Bool                                # NK Stage 2 succeeded
 end
 
 spectral_components = SpectralComponent[]
@@ -192,9 +194,29 @@ if use_direct_schur || num_clusters < num_eigenvalues
             λ_radius = Inf
         end
 
+        # Newton–Kantorovich refinement (Stage 2)
+        nk_radius = Inf
+        nk_cert = false
+        if is_certified
+            @info "  Running NK refinement (Stage 2)..."
+            try
+                nk_result = certify_eigenpair_nk(s; K=K, target_idx=i, N_C2=N_splitting)
+                nk_cert = nk_result.is_certified
+                if nk_cert
+                    nk_radius = nk_result.enclosure_radius
+                    @info "  NK CERTIFIED: r_NK = $nk_radius"
+                else
+                    @info "  NK FAILED (q₀ = $(nk_result.q0_bound))"
+                end
+            catch e
+                @warn "  NK error: $(typeof(e))"
+            end
+        end
+
         # Convert to high precision
         λ_hp = Complex{BigFloat}(real(λ_center), imag(λ_center))
         λ_rad_hp = BigFloat(λ_radius)
+        λ_nk_rad_hp = BigFloat(nk_radius)
 
         # Compute projection Πᵢ(1) using proper spectral projector formula
         # For non-normal operators with simple eigenvalues:
@@ -269,9 +291,9 @@ if use_direct_schur || num_clusters < num_eigenvalues
         norm_rad_hp = sqrt(norm_rad_sq)
 
         push!(spectral_components, SpectralComponent(
-            i, λ_hp, λ_rad_hp, proj_hp, proj_rad_hp,
+            i, λ_hp, λ_rad_hp, λ_nk_rad_hp, proj_hp, proj_rad_hp,
             lead_hp, lead_rad_hp, norm_hp, norm_rad_hp,
-            α, is_certified
+            α, is_certified, nk_cert
         ))
     end
 else
@@ -320,9 +342,27 @@ else
             end
         end
 
+        # Newton–Kantorovich refinement (Stage 2)
+        nk_radius_vbd = Inf
+        nk_cert_vbd = false
+        if inf_result.is_certified
+            @info "  Running NK refinement (Stage 2)..."
+            try
+                nk_result = certify_eigenpair_nk(s; K=K, target_idx=idx, N_C2=N_splitting)
+                nk_cert_vbd = nk_result.is_certified
+                if nk_cert_vbd
+                    nk_radius_vbd = nk_result.enclosure_radius
+                    @info "  NK CERTIFIED: r_NK = $nk_radius_vbd"
+                end
+            catch e
+                @warn "  NK error: $(typeof(e))"
+            end
+        end
+
         # Convert to high precision
         λ_hp = Complex{BigFloat}(real(λ_center), imag(λ_center))
         λ_rad_hp = BigFloat(λ_radius)
+        λ_nk_rad_hp = BigFloat(nk_radius_vbd)
 
         # Get projection of 1 onto this eigenspace
         proj_vec = finite_result.projections_of_one[idx]
@@ -354,9 +394,9 @@ else
         norm_rad_hp = sqrt(norm_rad_sq)
 
         push!(spectral_components, SpectralComponent(
-            idx, λ_hp, λ_rad_hp, proj_hp, proj_rad_hp,
+            idx, λ_hp, λ_rad_hp, λ_nk_rad_hp, proj_hp, proj_rad_hp,
             lead_hp, lead_rad_hp, norm_hp, norm_rad_hp,
-            inf_result.small_gain_factor, inf_result.is_certified
+            inf_result.small_gain_factor, inf_result.is_certified, nk_cert_vbd
         ))
     end
 end
@@ -377,7 +417,10 @@ for comp in spectral_components
     else
         @printf("  λ = %.30f + %.30f i\n", Float64(λ_re), Float64(λ_im))
     end
-    @printf("  Rigorous radius: %.6e\n", Float64(comp.eigenvalue_radius))
+    @printf("  Resolvent radius: %.6e\n", Float64(comp.eigenvalue_radius))
+    if comp.nk_certified
+        @printf("  NK radius:        %.6e\n", Float64(comp.eigenvalue_nk_radius))
+    end
     @printf("  Small-gain α: %.6f\n", comp.small_gain_alpha)
     println()
 
@@ -524,8 +567,11 @@ println()
 
 println("# Eigenvalues and their rigorous radii:")
 for (i, comp) in enumerate(spectral_components)
-    @printf("λ[%d] = %.40f ± %.6e\n", i, Float64(real(comp.eigenvalue)),
-            Float64(comp.eigenvalue_radius))
+    res_str = @sprintf("%.6e", Float64(comp.eigenvalue_radius))
+    nk_str = comp.nk_certified ? @sprintf("%.6e", Float64(comp.eigenvalue_nk_radius)) : "---"
+    best_rad = comp.nk_certified ? min(Float64(comp.eigenvalue_radius), Float64(comp.eigenvalue_nk_radius)) : Float64(comp.eigenvalue_radius)
+    @printf("λ[%d] = %.40f ± %.6e  (resolvent: %s, NK: %s)\n", i, Float64(real(comp.eigenvalue)),
+            best_rad, res_str, nk_str)
 end
 println()
 
@@ -722,8 +768,10 @@ if length(spectral_components) >= 2
             Float64(abs(spectral_components[2].eigenvalue) / abs(spectral_components[1].eigenvalue)))
 end
 println()
+num_nk_certified = count(c -> c.nk_certified, spectral_components)
 println("Truncation error: ε_K = $eps_K_float")
-println("All bounds are rigorous (certified via VBD + resolvent bridge)")
+println("All bounds are rigorous (certified via VBD + resolvent bridge + NK refinement)")
+println("NK-refined eigenvalues: $num_nk_certified out of $(length(spectral_components))")
 println()
 println("Gauss Problem:")
 println("  G_n(x) = ∫₀ˣ Lⁿ·1 dt converges to G(x) = log₂(1+x)")

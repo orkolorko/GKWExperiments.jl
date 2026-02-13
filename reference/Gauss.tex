@@ -1,0 +1,1336 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amsthm,amssymb,amsfonts,geometry,hyperref}
+\usepackage[ruled,vlined]{algorithm2e}
+\geometry{margin=1in}
+
+\newtheorem{definition}{Definition}[section]
+\newtheorem{remark}[definition]{Remark}
+\newtheorem{lemma}[definition]{Lemma}
+\newtheorem{theorem}[definition]{Theorem}
+\newtheorem{proposition}[definition]{Proposition}
+\newtheorem{corollary}[definition]{Corollary}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\title{\textbf{Validated Spectral Analysis of the Gauss Transfer Operator\\
+and the Gauss--Kuzmin--Wirsing Law}}
+\author{Isaia Nisoli}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We develop a rigorous Hardy-space framework for the Gauss transfer operator
+\[
+(L f)(w)=\sum_{n=1}^{\infty}\frac{1}{(w+n)^2}\,f\!\left(\frac{1}{w+n}\right),
+\]
+acting from \(H^2(D_1)\) to \(H^2(D_{3/2})\).
+We prove compactness, derive explicit norm and truncation estimates,
+and implement a validated numerical scheme to enclose multiple eigenvalues
+and eigenvectors of \(L\).
+This allows a certified computation of the Gauss--Kuzmin--Wirsing constant
+and a complete spectral expansion for continued-fraction digit distributions,
+answering Gauss's 1812 question with rigorous error bounds.
+\end{abstract}
+
+\section{Introduction and Main Results}
+
+The Gauss map \(T(x)=\{1/x\}\) on \((0,1]\) generates continued fractions.
+Gauss asked for the probability
+\[
+F_n(x)=\mathbb P(a_n\le x)
+\]
+that the \(n\)-th digit \(a_n\) of the continued-fraction expansion is at most \(x\),
+if \(x_0\) is uniformly distributed in \([0,1]\).
+This distribution is governed by iterates of the transfer operator
+\[
+(L f)(x)=\sum_{n\ge1}\frac{1}{(x+n)^2}f\!\left(\frac{1}{x+n}\right).
+\]
+
+We work in Hardy spaces \(H^2(D_r)\), with \(D_r=\{|w-1|<r\}\),
+derive explicit analytic bounds, and rigorously enclose the spectrum of \(L\).
+
+\paragraph{Main results.}
+\begin{itemize}
+\item \(L:H^2(D_1)\to H^2(D_{3/2})\) is compact with
+approximation numbers \(a_m(L)\le C(2/3)^m\).
+\item Certified enclosures of eigenvalues and eigenvectors,
+including rigorous bounds on the Gauss--Kuzmin--Wirsing constant.
+\item Spectral expansion
+\[
+F_n(x)=\frac{\ln(1+x)}{\ln2}
++\sum_{j\ge2}c_j\lambda_j^{\,n}H_j(x),
+\quad H_j(x)=\!\int_0^x\phi_j(t)\,dt,
+\]
+with error \(O(\rho^n)\).
+\end{itemize}
+
+\section{Analytic Framework}\label{sec:analytic-bounds}
+
+\begin{definition}[Hardy spaces]
+For \(r>0\), \(H^2(D_r)\) denotes the space of holomorphic functions on
+\(D_r=\{|w-1|<r\}\) with norm
+\[
+\|f\|_{H^2(D_r)}^2=\sum_{k\ge0}|c_k|^2 r^{2k},
+\qquad f(w)=\sum_{k\ge0}c_k(w-1)^k.
+\]
+\end{definition}
+
+\begin{lemma}[Geometry of the branch maps]
+Let \(\tau_n(w)=1/(w+n)\).
+Then for all \(n\ge1\), \(\tau_n(D_{3/2})\subset D_1\).
+\end{lemma}
+
+\begin{proof}
+For \(w\in D_{3/2}\), \(\Re w>-\tfrac12\).
+Compute
+\[
+|\tau_n(w)-1|=\frac{|w+n-1|}{|w+n|},
+\qquad
+|w+n|^2-|w+n-1|^2=2\Re w+(2n-1).
+\]
+Since \(\Re w>-\tfrac12\), we get \(2\Re w+(2n-1)>2n-2\ge0\),
+with equality only for \(n=1\) and \(w=-\tfrac12\) on \(\partial D_{3/2}\).
+Hence \(|w+n-1|<|w+n|\) and \(|\tau_n(w)-1|<1\), proving the claim.
+\end{proof}
+
+\begin{proposition}
+\label{prop:branch-H2}
+For each $n\in\mathbb N$, the composition operator
+\[
+C_{\tau_n}:H^2(D_1)\to H^2(D_{3/2}),\qquad C_{\tau_n}f=f\circ\tau_n,
+\]
+satisfies
+\[
+\|C_{\tau_n}\|_{H^2(D_1)\to H^2(D_{3/2})}
+\ \le\
+\Big(\frac{1+|\phi_n(0)|}{1-|\phi_n(0)|}\Big)^{1/2}
+=\sqrt{2n+1},
+\]
+where $\phi_n=T_1^{-1}\circ\tau_n\circ T_{3/2}$ with $T_r(\zeta)=1+r\zeta$.
+\end{proposition}
+
+\begin{proof}
+Let $U_r:H^2(D_r)\to H^2(\mathbb D)$ be the unitary operator $(U_r f)(\zeta)=f(T_r(\zeta))$.
+Then
+\[
+U_{3/2}\, C_{\tau_n}\, U_1^{-1} \;=\; C_{\phi_n},
+\qquad
+\phi_n=T_1^{-1}\circ\tau_n\circ T_{3/2},
+\]
+so $\|C_{\tau_n}\|=\|C_{\phi_n}\|$. A direct computation gives
+\[
+\phi_n(\zeta)=\frac{-\,n-\tfrac32\zeta}{\,n+1+\tfrac32\zeta\,},
+\qquad
+\phi_n(0)=-\frac{n}{n+1}.
+\]
+By \cite[Thm.~3.6]{CowenMacCluer2019}, for $H^2(\mathbb D)$ we have
+\[
+\|C_{\phi}\|_{H^2(\mathbb D)}\le\big(\tfrac{1+|\phi(0)|}{1-|\phi(0)|}\big)^{1/2}.
+\]
+Applying this to $\phi=\phi_n$ yields
+\[
+\|C_{\tau_n}\|_{H^2(D_1)\to H^2(D_{3/2})}
+=\|C_{\phi_n}\|_{H^2(\mathbb D)}
+\le \Big(\frac{1+\frac{n}{n+1}}{1-\frac{n}{n+1}}\Big)^{1/2}
+=\sqrt{2n+1}.
+\]
+\end{proof}
+
+
+
+\begin{lemma}\label{lem:weight-bound}
+For \(w\in D_{3/2}\),
+\[
+|(w+n)^{-2}|\le(n-\tfrac12)^{-2}.
+\]
+\end{lemma}
+
+\begin{proof}
+The minimum of \(|w+n|\) on \(\overline{D_{3/2}}\) is at \(w=-\tfrac12\):
+\(|w+n|\ge n-\tfrac12\).
+\end{proof}
+
+\begin{theorem}
+\label{thm:L1-H2-bound}
+We have
+\[
+\|L\|_{H^2(D_1)\to H^2(D_{3/2})}
+\ \le\
+\sum_{n\ge1}\frac{\sqrt{2n+1}}{(n-\tfrac12)^2}
+\ \le\
+\sqrt{6}\,2^{3/2}\!\bigl(1-2^{-3/2}\bigr)\,\zeta\!\Big(\tfrac32\Big)
+=:C_{2}.
+\]
+\end{theorem}
+\begin{proof}
+From Lemma \ref{lem:weight-bound} and Proposition~\ref{prop:branch-H2},
+\[
+\|L f\|_{H^2(D_1)\to H^2(D_{3/2})}
+\le \sum_{n\ge1}\frac{1}{(n-\tfrac12)^2}\,\|C_{\tau_n}\|\,\|f\|
+\le \sum_{n\ge1}\frac{\sqrt{2n+1}}{(n-\tfrac12)^2}\,\|f\|.
+\]
+Use the elementary comparison
+\(
+\frac{2n+1}{n-\tfrac12}\le 6
+\)
+to get \(\sqrt{2n+1}\le \sqrt6\,(n-\tfrac12)^{1/2}\).
+
+Now, we observe that 
+\[
+\sum_{n\geq 1}(n-\tfrac12)^{-s} = \sum_{m\geq 0}(m+\tfrac12)^{-s} = 2^s\sum_{m\geq 0}(2m+1)^{-s},
+\]
+and that 
+\[
+\sum_{m=0}^\infty (2m+1)^{-s}
+= \zeta(s)-\sum_{m=1}^\infty (2m)^{-s}
+= \zeta(s)-2^{-s}\zeta(s)
+= (1-2^{-s})\,\zeta(s), \qquad \Re s>1.
+\]
+Thus:
+\[
+\sum_{n\geq 1}(n-\tfrac12)^{-s} = 2^s (1-2^{-s})\,\zeta(s) = (2^s - 1)\,\zeta(s).
+\]
+Hence
+\[
+\sum_{n\ge1}\frac{\sqrt{2n+1}}{(n-\tfrac12)^2}
+\le \sqrt6\sum_{n\ge1}(n-\tfrac12)^{-3/2}
+=\sqrt6\,\!\bigl(2^{3/2}-1\bigr)\,\zeta(\tfrac32).
+\]
+\end{proof}
+\begin{remark}
+% A rigorous numerical evaluation gives an upper bound of 
+% \[
+% C_2 \leq 11.7000807085501779306421385006549
+% \]
+We observe that
+\[
+\frac{\sqrt{2n+1}}{(n-\tfrac12)^2}
+=\sqrt{\frac{2n+1}{\,n-\tfrac12\,}}\,(n-\tfrac12)^{-3/2},
+\qquad
+\sup_{n\ge N}\frac{2n+1}{n-\tfrac12}
+=2+\frac{2}{N-\tfrac12}.
+\]
+Hence, for any $N\ge1$,
+\[
+\|L\|_{H^2(D_1)\to H^2(D_{3/2})}
+\le \sum_{n=1}^{N-1}\frac{\sqrt{2n+1}}{(n-\tfrac12)^2}
+\;+\;\sqrt{\,2+\frac{2}{N-\tfrac12}\,}\,
+\sum_{n\ge N}(n-\tfrac12)^{-3/2}.
+\]
+Using the Hurwitz zeta,
+\(\displaystyle \sum_{n\ge N}(n-\tfrac12)^{-3/2}=\zeta\!\left(\tfrac32,\,N-\tfrac12\right)\).
+
+In table \ref{tab:C2-bounds} are rigorously computed upper bounds for $C_2$ as a function of the splitting $N$, $N=1$ is the base case from Theorem~\ref{thm:L1-H2-bound},
+using Arb, with maximum enclosure radius bounded by $5\times10^{-34}$.
+
+\end{remark}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{r r}
+\hline
+$N$ & $C_2(N)$ \\ \hline
+1 & 11.7000807086 \\
+2 & 10.4849507042 \\
+3 & 10.2709840576 \\
+4 & 10.1907129342 \\
+5 & 10.1506945125 \\
+10 & 10.0893118365 \\
+100 & 10.0590444185 \\
+1000 & 10.0581271764 \\
+10000 & 10.0580982915 \\
+\hline
+\end{tabular}
+\caption{Refined upper bounds for \(C_2\) as a function of the splitting \(N\).}\label{tab:C2-bounds}
+\end{table}
+
+
+\section{Truncation bounds and approximation numbers}
+
+
+Compare the analogous estimate in the $H^\infty$–ellipse setting: \cite[Thm.~3.3(ii)]{BandtlowSlipantschuk2020}. 
+See also the published variant using the same factorization idea in \cite{BandtlowPohlSchickWeisse2021}.
+
+\begin{lemma}
+\label{lem:H2-tail}
+Let \(0<r<R\) and let \(f(w)=\sum_{n\ge0} a_n (w-1)^n\) be holomorphic on \(D_R=\{|w-1|<R\}\) with
+\[
+\|f\|_{H^2(D_R)}^2=\sum_{n\ge0} |a_n|^2 R^{2n}<\infty.
+\]
+Let \(\Pi_k f:=\sum_{n=0}^k a_n (w-1)^n\) be the degree-\(k\) truncation, and let
+\(J:H^2(D_R)\to H^2(D_r)\) be the restriction map (inclusion at the level of Banach spaces). Then
+\[
+\|\,Jf-\Pi_k f\,\|_{H^2(D_r)}
+\;\le\;
+\Bigl(\frac{r}{R}\Bigr)^{k+1}\,\|f\|_{H^2(D_R)}.
+\]
+In particular, for \(r=1\) and \(R=\tfrac32\),
+\[
+\|\,Jf-\Pi_k f\,\|_{H^2(D_1)}
+\;\le\;
+\Bigl(\frac{2}{3}\Bigr)^{k+1}\,\|f\|_{H^2(D_{3/2})}.
+\]
+\end{lemma}
+
+\begin{proof}
+First, \(\|J\|_{H^2(D_R)\to H^2(D_r)}=1\): indeed,
+\(\sum |a_n|^2 r^{2n}\le \sum |a_n|^2 R^{2n}\) and equality holds for constants.
+By the definition of the \(H^2(D_r)\) norm,
+\[
+\|Jf-\Pi_k f\|_{H^2(D_r)}^2
+=\sum_{n>k} |a_n|^2 r^{2n}
+=\sum_{n>k} |a_n|^2 R^{2n}\,\Bigl(\frac{r}{R}\Bigr)^{2n}.
+\]
+Since \(0<\frac{r}{R}<1\) and \(n>k\), we have
+\(\bigl(\frac{r}{R}\bigr)^{2n}\le \bigl(\frac{r}{R}\bigr)^{2(k+1)}\). Therefore
+\[
+\|Jf-\Pi_k f\|_{H^2(D_r)}^2
+\le \Bigl(\frac{r}{R}\Bigr)^{2(k+1)} \sum_{n>k} |a_n|^2 R^{2n}
+\le \Bigl(\frac{r}{R}\Bigr)^{2(k+1)} \sum_{n\ge0} |a_n|^2 R^{2n}
+= \Bigl(\frac{r}{R}\Bigr)^{2(k+1)} \|f\|_{H^2(D_R)}^2,
+\]
+and taking square roots gives the claim.
+\end{proof}
+
+\begin{theorem}
+\label{thm:trunc-H2-correct}
+Let $T:=R\,L\,S: H^2(D_{3/2})\to H^2(D_1)$, where $S$ and $R$ are the restriction maps
+$H^2(D_{3/2})\to H^2(D_1)$. Let $\Pi_k$ be the degree-$k$ truncation on $H^2(D_{3/2})$
+and $\pi_K$ the degree-$K$ truncation on $H^2(D_{3/2})$ (acting on the \emph{range} of $L$).
+Then, with $C_2:=\|L\|_{H^2(D_1)\to H^2(D_{3/2})}$ (e.g. $C_2\le\sqrt6\,2^{3/2}(1-2^{-3/2})\zeta(\tfrac32)$),
+\[
+\big\|\,T - R\,\pi_K\,L\,\Pi_k\,S\,\big\|_{H^2(D_{3/2})\to H^2(D_1)}
+\ \le\
+C_2\!\left[\left(\frac{2}{3}\right)^{K+1}
++\left(\frac{2}{3}\right)^{k+1}\right].
+\]
+\end{theorem}
+
+\begin{proof}
+Decompose
+\[
+T - R\,\pi_K\,L\,\Pi_k\,S
+= R\,(I-\pi_K)\,L\,S \;+\; R\,\pi_K\,L\,(I-\Pi_k)\,S
+=: A_K + B_k .
+\]
+Since $\|R\|=\|S\|=1$ and $\|L\|=C_2$, it suffices to bound the truncation tails after
+restricting from radius $3/2$ to radius $1$.
+
+For $A_K$ (target-side tail):
+by Lemma~\ref{lem:H2-tail} with $(r,R)=(1,3/2)$ applied to $g\in H^2(D_{3/2})$,
+\[
+\|R\,(I-\pi_K)g\|_{H^2(D_1)}
+\ \le\ \Big(\frac{2}{3}\Big)^{K+1}\,\|g\|_{H^2(D_{3/2})}.
+\]
+Hence
+\[
+\|A_K\|
+=\sup_{\|f\|_{H^2(D_{3/2})}=1}
+\|R\,(I-\pi_K)\,L\,S f\|_{H^2(D_1)}
+\ \le\ \Big(\frac{2}{3}\Big)^{K+1}\,\|L\|
+= \Big(\frac{2}{3}\Big)^{K+1} C_2.
+\]
+
+For $B_k$ (domain-side tail):
+apply Lemma~\ref{lem:H2-tail} to $f\in H^2(D_{3/2})$ to get
+\[
+\|S f - S\Pi_k f\|_{H^2(D_1)}
+\ \le\ \Big(\frac{2}{3}\Big)^{k+1}\,\|f\|_{H^2(D_{3/2})}.
+\]
+Therefore
+\[
+\|B_k\|
+\le \|R\|\,\|\pi_K\|\,\|L\|\,\|S(I-\Pi_k)\|
+\le C_2\,\Big(\frac{2}{3}\Big)^{k+1}.
+\]
+
+Combining the two bounds yields the claim.
+\end{proof}
+
+
+% \begin{corollary}
+% \label{cor:approxnums}
+% Let $T:=R\,L\,S: H^2(D_{3/2})\to H^2(D_1)$, where $S$ and $R$ are the
+% restriction maps $H^2(D_{3/2})\to H^2(D_1)$ (both of norm $1$).
+% Let $a_m(T)$ denote the $m$-th approximation number of $T$, i.e.
+% \[
+% a_m(T)\ :=\ \inf\{\ \|T-F\|\ :\ \mathrm{rank}(F)<m\ \}.
+% \]
+% Then, with $C_2:=\|L\|_{H^2(D_1)\to H^2(D_{3/2})}$, one has the
+% geometric bound
+% \[
+% \boxed{\qquad a_m(T)\ \le\ 2\,C_2\ \Bigl(\frac{2}{3}\Bigr)^{m}
+% \qquad (m\ge1). \qquad}
+% \]
+% In particular, $T$ is compact; moreover $\sum_{m\ge1} a_m(T) <\infty$, so
+% $T$ is trace class on $H^2(D_1)$.
+% \end{corollary}
+
+% \begin{proof}
+% For integers $K,k\ge0$ define the finite-rank operator
+% \[
+% T_{K,k}\ :=\ R\,\pi_K\,L\,\Pi_k\,S.
+% \]
+% Its range is contained in the $(K+1)$-dimensional subspace
+% $\mathrm{span}\{(w-1)^n\}_{n=0}^K$ of $H^2(D_1)$, hence
+% $\mathrm{rank}(T_{K,k})\le K+1$. Also, $\Pi_k$ has range of dimension
+% $k+1$, so $\mathrm{rank}(T_{K,k})\le k+1$. Thus
+% \[
+% \mathrm{rank}(T_{K,k})\ \le\ \min\{K+1,k+1\}.
+% \]
+
+% By the truncation inequality (Theorem~\ref{thm:trunc-H2-correct}),
+% \[
+% \|T-T_{K,k}\|
+% \ \le\ C_2\Bigl[\Bigl(\tfrac{2}{3}\Bigr)^{K+1}
+%                  +\Bigl(\tfrac{2}{3}\Bigr)^{k+1}\Bigr].
+% \]
+% Given $m\ge1$, choose $K=k=m-1$. Then $\mathrm{rank}(T_{K,k})\le m$ and
+% \[
+% \|T-T_{K,k}\|\ \le\ 2\,C_2\Bigl(\tfrac{2}{3}\Bigr)^{m}.
+% \]
+% Taking the infimum over all rank-$<m$ operators yields
+% $a_m(T)\le 2\,C_2(2/3)^{m}$.
+
+% Compactness follows since $a_m(T)\to0$. Furthermore,
+% $\sum_{m\ge1}a_m(T)\le 2C_2\sum_{m\ge1}(2/3)^{m}<\infty$, so $T$ is
+% trace class.
+% \end{proof}
+
+\begin{corollary}[One–sided finite–rank approximations of $L_{1}$ and $L_{3/2}$]
+\label{cor:one-sided-approxs}
+Let $L:H^2(D_1)\to H^2(D_{3/2})$ be bounded with $\|L\|=C_2$, and set
+$L_{1}=S\,L:H^2(D_1)\to H^2(D_1)$ and $L_{3/2}=L\,R:H^2(D_{3/2})\to H^2(D_{3/2})$.
+
+\smallskip
+\noindent\textup{(i) Range truncation for $L_{1}$.}
+For $K\ge0$ define the finite–rank operator
+\[
+(L_{1})_{K}:=\Pi_{K}\,L_{1}=\Pi_{K}\,S\,L\quad(H^2(D_1)\to H^2(D_1)).
+\]
+Then
+\[
+\|\,L_{1}-(L_{1})_{K}\,\|_{H^2(D_1)\to H^2(D_1)}
+\ \le\ C_2\Bigl(\frac{2}{3}\Bigr)^{K+1}.
+\]
+
+\noindent\textup{(ii) Domain truncation for $L_{3/2}$.}
+For $k\ge0$ define the finite–rank operator
+\[
+(L_{3/2})_{k}:=L\,\Pi_{k}\,R\quad(H^2(D_{3/2})\to H^2(D_{3/2})).
+\]
+Then
+\[
+\|\,L_{3/2}-(L_{3/2})_{k}\,\|_{H^2(D_{3/2})\to H^2(D_{3/2})}
+\ \le\ C_2\Bigl(\frac{2}{3}\Bigr)^{k+1}.
+\]
+\end{corollary}
+
+\begin{proof}
+(i) For $f\in H^2(D_1)$, $L_{1}f=S(Lf)$ is the restriction to $D_1$ of a function in $H^2(D_{3/2})$
+with norm $\le C_2\|f\|_{H^2(D_1)}$. Apply Lemma~\ref{lem:H2-tail} with $(r,R)=(1,3/2)$ to
+$g:=L f\in H^2(D_{3/2})$:
+\[
+\|\,L_{1}f-\Pi_{K}L_{1}f\,\|_{H^2(D_1)}=\|\,Sg-\Pi_K Sg\,\|_{H^2(D_1)}
+\le \Bigl(\tfrac{2}{3}\Bigr)^{K+1}\|g\|_{H^2(D_{3/2})}
+\le C_2\Bigl(\tfrac{2}{3}\Bigr)^{K+1}\|f\|_{H^2(D_1)}.
+\]
+Taking the supremum gives the claim.
+
+(ii) For $F\in H^2(D_{3/2})$,
+\[
+\|\,L_{3/2}F-(L_{3/2})_{k}F\,\|_{H^2(D_{3/2})}
+=\|\,L(RF-\Pi_k RF)\,\|_{H^2(D_{3/2})}
+\le C_2\,\|\,RF-\Pi_k RF\,\|_{H^2(D_1)}.
+\]
+Apply Lemma~\ref{lem:H2-tail} with $(r,R)=(1,3/2)$ to $F$ to obtain
+$\|RF-\Pi_k RF\|_{H^2(D_1)}\le (2/3)^{k+1}\|F\|_{H^2(D_{3/2})}$, which yields the bound.
+\end{proof}
+
+\begin{proposition}
+\label{prop:L-on-each-space}
+Let $L:H^2(D_1)\to H^2(D_{3/2})$ be bounded with $\|L\|=C_2$, and set
+$L_{1}=S\,L:H^2(D_1)\to H^2(D_1)$ and $L_{3/2}=L\,R:H^2(D_{3/2})\to H^2(D_{3/2})$.
+Then:
+\begin{enumerate}
+\item $L_{1}$ and $L_{3/2}$ are compact.
+\item For all $m\ge1$,
+\[
+a_m(L_{1})\ \le\ C_2\Bigl(\tfrac{2}{3}\Bigr)^{m-1},
+\qquad
+a_m(L_{3/2})\ \le\ C_2\Bigl(\tfrac{2}{3}\Bigr)^{m-1}.
+\]
+\end{enumerate}
+\end{proposition}
+\begin{proof}
+By Corollary~\ref{cor:one-sided-approxs}, for every $K\ge0$ the rank-$\le K+1$
+operator $(L_{1})_{K}=\Pi_K S L$ satisfies
+$\|L_{1}-(L_{1})_{K}\|\le C_2(2/3)^{K+1}$; hence $\|L_{1}-(L_{1})_{K}\|\to0$,
+so $L_{1}$ is compact. The same argument with $(L_{3/2})_{k}=L\Pi_k R$
+gives compactness of $L_{3/2}$.
+
+For the approximation numbers, fix $m\ge1$. If $m=1$, then
+$a_1(L_{1})\le\|L_{1}\|\le C_2$ and similarly for $L_{3/2}$, which matches the
+stated bound. If $m\ge2$, choose $K=k=m-2$ so that
+$\operatorname{rank}((L_{1})_{K})\le m-1$ and $\operatorname{rank}((L_{3/2})_{k})\le m-1$.
+Then
+\[
+a_m(L_{1})\ \le\ \|L_{1}-(L_{1})_{m-2}\|
+\ \le\ C_2\Bigl(\tfrac{2}{3}\Bigr)^{(m-2)+1}
+\ =\ C_2\Bigl(\tfrac{2}{3}\Bigr)^{m-1},
+\]
+and the same estimate holds for $a_m(L_{3/2})$.
+\end{proof}
+
+\begin{remark}
+An alternative proof of the compactness of $J_{R\to r}$ is to use the normal–family
+(Montel) theorem: the unit ball of $H^2(D_R)$ is locally bounded, hence normal; any
+bounded sequence has a subsequence converging uniformly on $\overline{D_r}$, and the
+coefficient tail estimate of Lemma~\ref{lem:H2-tail} upgrades this to convergence in
+the $H^2(D_r)$–norm, yielding compactness.
+\end{remark}
+
+\begin{corollary}[Eigenvalue decay and trace class for $L_{1}$ and $L_{3/2}$]
+\label{cor:eig-decay-traceclass}
+Let $L_{1}=SL:H^2(D_1)\to H^2(D_1)$ and $L_{3/2}=LR:H^2(D_{3/2})\to H^2(D_{3/2})$
+be as in Proposition~\ref{prop:L-on-each-space}. Enumerate the eigenvalues
+$\{\lambda_m(\cdot)\}_{m\ge1}$ in nonincreasing order of modulus, with multiplicity.
+Then, with $C_2=\|L\|_{H^2(D_1)\to H^2(D_{3/2})}$,
+\[
+|\lambda_m(L_{1})|\ \le\ C_2\Bigl(\tfrac{2}{3}\Bigr)^{m-1},
+\qquad
+|\lambda_m(L_{3/2})|\ \le\ C_2\Bigl(\tfrac{2}{3}\Bigr)^{m-1}
+\qquad(m\ge1).
+\]
+In particular, both $L_{1}$ and $L_{3/2}$ are trace class and satisfy the trace–norm bounds
+\[
+\|L_{1}\|_{S_1}\ \le\ 3\,C_2,
+\qquad
+\|L_{3/2}\|_{S_1}\ \le\ 3\,C_2,
+\]
+hence $\displaystyle \sum_{m\ge1}|\lambda_m(L_{1})|<\infty$ and
+$\displaystyle \sum_{m\ge1}|\lambda_m(L_{3/2})|<\infty$.
+\end{corollary}
+
+\begin{proof}
+By Proposition~\ref{prop:L-on-each-space}, the approximation numbers satisfy
+$a_m(L_{1}),\,a_m(L_{3/2})\le C_2(2/3)^{m-1}$ for $m\ge1$. On a Hilbert space,
+$a_m(T)=s_m(T)$ equals the $m$th singular value, and Weyl’s inequality gives
+$|\lambda_m(T)|\le s_m(T)$ (see Simon~\cite[Thm.~1.33]{Simon05}). Thus
+$|\lambda_m(L_{1})|,|\lambda_m(L_{3/2})|\le C_2(2/3)^{m-1}$.
+
+Moreover, $\sum_{m\ge1}s_m(L_{1})\le C_2\sum_{m\ge1}(2/3)^{m-1}=3C_2$, and similarly for
+$L_{3/2}$. Hence $L_{1}$ and $L_{3/2}$ are trace class with the stated trace–norm bounds
+(see Simon~\cite[Thm.~1.35]{Simon05}). Finally, since $|\lambda_m|\le s_m$, the series of
+absolute eigenvalues is summable.
+\end{proof}
+
+\begin{remark}
+\label{rem:Ak-norms}
+Let $A_k$ denote the Galerkin compression of either endomorphism
+$L_1:=SL:H^2(D_1)\to H^2(D_1)$ or $L_{3/2}:=LR:H^2(D_{3/2})\to H^2(D_{3/2})$
+onto $\mathcal V_N=\mathrm{span}\{(w-1)^n\}_{n=0}^{N-1}$, with orthogonal
+projection taken in the $H^2(D_r)$ inner product. Then
+\[
+\|A_k\|_{(r)}\ \le\ \|L_r\|\ \le\ C_2,\qquad r\in\{1,\tfrac32\}.
+\]
+Indeed, $\|L_1\|\le\|S\|\,\|L\|=C_2$ and $\|L_{3/2}\|\le\|L\|\,\|R\|=C_2$
+(since $\|R\|=\|S\|=1$), and compressions do not increase the operator norm.
+\end{remark}
+
+\section{Spectral stability and projections from the discretization}
+\label{sec:spectral-stability}
+
+Recall the endomorphisms
+\[
+L_{1}:=S\,L:H^2(D_1)\to H^2(D_1),
+\qquad
+L_{3/2}:=L\,R:H^2(D_{3/2})\to H^2(D_{3/2}),
+\]
+and their one–sided finite–rank approximants from Corollary~\ref{cor:one-sided-approxs}:
+\[
+(L_{1})_{K}=\Pi_{K} S L,\qquad
+(L_{3/2})_{k}=L \Pi_{k} R,
+\]
+with
+\[
+\|L_{1}-(L_{1})_{K}\| \le \varepsilon_{K}:=C_2\Bigl(\tfrac{2}{3}\Bigr)^{K+1},
+\qquad
+\|L_{3/2}-(L_{3/2})_{k}\| \le \delta_{k}:=C_2\Bigl(\tfrac{2}{3}\Bigr)^{k+1}.
+\]
+
+We now record a quantitative ``resolvent bridge'' and its consequences for enclosing
+eigenvalues and approximating spectral projections.
+
+\begin{proposition}\label{prop:ev-norm-bound}
+Let $(\lambda,\varphi)$ be a (nonzero) eigenpair of $L$ with
+$\varphi\in H^2(D_1)\cap H^2(D_{3/2})$ and $L\varphi=\lambda\varphi$.
+Then
+\[
+\boxed{\qquad
+\|\varphi\|_{H^2(D_{3/2})}
+\ \le\ \frac{C_2}{|\lambda|}\,\|\varphi\|_{H^2(D_1)}.
+\qquad}
+\]
+In particular, under the normalization $\|\varphi\|_{H^2(D_1)}=1$,
+\[
+\|\varphi\|_{H^2(D_{3/2})}\ \le\ \frac{C_2}{|\lambda|}.
+\]
+\end{proposition}
+
+\begin{proof}
+Since $L\varphi=\lambda\varphi$ and $L:H^2(D_1)\to H^2(D_{3/2})$,
+\[
+\|\varphi\|_{H^2(D_{3/2})}
+=\frac{1}{|\lambda|}\,\|L\varphi\|_{H^2(D_{3/2})}
+\le \frac{C_2}{|\lambda|}\,\|\varphi\|_{H^2(D_1)}.
+\]
+\end{proof}
+
+
+\begin{lemma}[Resolvent bridge]\label{lem:resolvent-bridge}
+Let $A,B$ be bounded operators on a Banach space and fix $z\in\mathbb{C}$ with
+$z\in\rho(B)$ (the resolvent set). If
+\[
+\alpha(z):=\|(A-B)R_B(z)\|\;<\;1,
+\]
+then $z\in\rho(A)$ and
+\begin{equation}\label{eq:resolvent-bridge-bounds}
+\|R_A(z)\|\ \le\ \frac{\|R_B(z)\|}{1-\alpha(z)},
+\qquad
+\|R_A(z)-R_B(z)\|
+\ \le\ \frac{\|R_B(z)\|^2\,\|A-B\|}{1-\alpha(z)}.
+\end{equation}
+Moreover, if $\Gamma$ is a positively oriented Jordan curve with $\Gamma\subset\rho(B)$
+and $\sup_{z\in\Gamma}\alpha(z)<1$, then $\Gamma\subset\rho(A)$ and the Riesz projections
+\[
+P_A(\Gamma)=\frac{1}{2\pi i}\int_\Gamma R_A(z)\,dz,\qquad
+P_B(\Gamma)=\frac{1}{2\pi i}\int_\Gamma R_B(z)\,dz
+\]
+are both well defined and satisfy
+\begin{equation}\label{eq:proj-diff}
+\|P_A(\Gamma)-P_B(\Gamma)\|
+\ \le\ \frac{|\Gamma|}{2\pi}\ \sup_{z\in\Gamma}
+\frac{\|R_B(z)\|^2\,\|A-B\|}{1-\alpha(z)},
+\end{equation}
+and $A$ and $B$ have the same total algebraic multiplicity of eigenvalues inside $\Gamma$.
+\end{lemma}
+
+\begin{proof}
+Use the resolvent identity $R_A(z)=R_B(z)\bigl[I-(A-B)R_B(z)\bigr]^{-1}$ and Neumann
+series when $\|(A-B)R_B(z)\|<1$, then integrate on~$\Gamma$ for the projection bounds.
+\end{proof}
+
+\subsection*{Applications to $L_{1}$ and $L_{3/2}$}
+
+We apply Lemma~\ref{lem:resolvent-bridge} with
+\[
+(A,B)\in\bigl\{(L_{1},(L_{1})_{K}),\ (L_{3/2},(L_{3/2})_{k})\bigr\}.
+\]
+All norms below are operator norms on the indicated Hardy space.
+
+If for some $z\in\mathbb{C}$ we have
+\[
+\varepsilon_{K}\,\bigl\|R_{(L_{1})_{K}}(z)\bigr\| \;<\; 1
+\quad\text{or}\quad
+\delta_{k}\,\bigl\|R_{(L_{3/2})_{k}}(z)\bigr\| \;<\; 1,
+\]
+then $z\in\rho(L_{1})$ or $z\in\rho(L_{3/2})$, respectively, and
+\[
+\|R_{L_{1}}(z)\|
+\le \frac{\|R_{(L_{1})_{K}}(z)\|}{1-\varepsilon_K\|R_{(L_{1})_{K}}(z)\|},
+\qquad
+\|R_{L_{3/2}}(z)\|
+\le \frac{\|R_{(L_{3/2})_{k}}(z)\|}{1-\delta_k\|R_{(L_{3/2})_{k}}(z)\|}.
+\]
+Thus validated upper bounds on the discretized resolvent certify **spectral gaps** for
+$L_{1}$ or $L_{3/2}$.
+
+Let $\Gamma$ be a simple closed contour containing a cluster of eigenvalues of the
+discretization (but no other spectrum), and suppose
+\[
+\sup_{z\in\Gamma}\ \varepsilon_{K}\,\bigl\|R_{(L_{1})_{K}}(z)\bigr\|\ <\ 1
+\quad\text{or}\quad
+\sup_{z\in\Gamma}\ \delta_{k}\,\bigl\|R_{(L_{3/2})_{k}}(z)\bigr\|\ <\ 1.
+\]
+Then $\Gamma$ encloses exactly the same total algebraic multiplicity of eigenvalues for
+$L_{1}$ (resp. $L_{3/2}$) as for the discretization. In particular, taking $\Gamma$ to be a
+small circle around a simple eigenvalue of the discretization yields a validated enclosure
+for the corresponding eigenvalue of $L_{1}$ or $L_{3/2}$.
+
+Under the same hypothesis as in (B), the spectral projector onto the
+eigenspace(s) inside $\Gamma$ satisfies
+\[
+\|P_{L_{1}}(\Gamma)-P_{(L_{1})_{K}}(\Gamma)\|
+\ \le\ \frac{|\Gamma|}{2\pi}\ \sup_{z\in\Gamma}
+\frac{\|R_{(L_{1})_{K}}(z)\|^2\,\varepsilon_{K}}{1-\varepsilon_{K}\|R_{(L_{1})_{K}}(z)\|},
+\]
+and the analogous bound holds with $L_{3/2}$ and $(L_{3/2})_{k}$, with $\delta_k$ in place
+of $\varepsilon_K$. Hence eigenvectors and invariant subspaces (right/left) can be
+approximated by integrating the discretized resolvent along~$\Gamma$ with an explicit
+a posteriori error bound.
+
+\medskip
+\noindent\textbf{Remarks.}
+(i) Since $(L_{1})_{K}$ and $(L_{3/2})_{k}$ have finite rank, their resolvent norms on
+a circle $\Gamma$ can be computed (and rigorously enclosed) by any certified linear–algebra
+routine (e.g., via Schur form and interval/ball arithmetic).  
+(ii) Because the one–sided errors $\varepsilon_K,\delta_k$ decay like $(2/3)^{\cdot}$,
+taking modest $K$ or $k$ often suffices to meet the small–gain condition
+$\sup_{z\in\Gamma}\alpha(z)<1$.  
+(iii) If $\Gamma$ surrounds the origin, note that the finite–rank maps may have $0$ in
+their spectrum; choose $\Gamma$ avoiding~$0$ or use two–sided compressions if needed
+(Thm.~\ref{thm:trunc-H2-correct}).
+
+The resolvent identity and Riesz projections are standard; see, e.g., Kato, \emph{Perturbation Theory for Linear Operators}, Ch.~IV.
+
+
+\section{Schur bridge on \texorpdfstring{$H^2(D_r)$}{H2(Dr)}}
+\label{sec:schur-H2r}
+
+Fix $r>0$ and work in the $N$–dimensional monomial subspace
+$\mathcal V_N=\operatorname{span}\{(w-1)^n\}_{n=0}^{N-1}$.
+In this basis the $H^2(D_r)$ Gram is diagonal,
+\[
+S_r=\operatorname{diag}(r^{2n})_{n=0}^{N-1},\qquad
+C_r:=S_r^{1/2}=\operatorname{diag}(r^{n})_{n=0}^{N-1}.
+\]
+For a matrix $M\in\mathbb{C}^{N\times N}$ representing a linear map on $\mathcal V_N$,
+the $H^2(D_r)$–operator norm is
+\begin{equation}\label{eq:Hr-norm}
+\|M\|_{(r)}:=\|\,C_r M C_r^{-1}\,\|_2 ,
+\end{equation}
+and the $S_r$–adjoint is $M^\sharp := S_r^{-1} M^\ast S_r$.
+
+\section{Schur build in \texorpdfstring{$H^2(D_r)$}{H2(Dr)} and resolvent bounds}
+\label{sec:schur-centered}
+
+Fix \(r>0\) and the \(N\)-dimensional monomial subspace
+\(\mathcal V_N=\mathrm{span}\{(w-1)^n\}_{n=0}^{N-1}\).
+In this basis the \(H^2(D_r)\) Gram is diagonal
+\[
+S_r=\mathrm{diag}(r^{2n})_{n=0}^{N-1},\qquad C_r:=S_r^{1/2}=\mathrm{diag}(r^{n})_{n=0}^{N-1},
+\]
+and the induced \(H^2(D_r)\)-operator norm is
+\[
+\|M\|_{(r)}:=\|\,C_r\,M\,C_r^{-1}\,\|_2.
+\]
+For matrices \(X\), the \(S_r\)-adjoint is \(X^\sharp:=S_r^{-1}X^\ast S_r\).
+
+\subsection*{Central procedure: build an \(H^2(D_r)\)-Schur pair}
+Given a discretization \(A_k\in\mathbb C^{N\times N}\) of an endomorphism of \(H^2(D_r)\),
+construct the Schur pair and its defects as follows.
+
+\begin{enumerate}
+\item \textbf{Whiten.} Set \(\widetilde A:=C_r\,A_k\,C_r^{-1}\).
+Then \(\|\cdot\|_{(r)}\) becomes the Euclidean norm on \(\widetilde A\).
+
+\item \textbf{Euclidean Schur.} Compute the (complex) Schur decomposition
+\[
+\widetilde A\,Q=Q\,T,
+\]
+with \(Q\) unitary and \(T\) upper (quasi-)triangular.
+
+\item \textbf{Unwhiten the Schur vectors.} Define
+\[
+X:=C_r^{-1}Q,\qquad X^\sharp:=S_r^{-1}X^\ast S_r.
+\]
+Then \(A_k X = X T\) up to roundoff, and \(X^\sharp X \approx I\).
+
+\item \textbf{Defects to be measured (cheaply).}
+\[
+\delta\ :=\ \|I-X^\sharp X\|_{(r)}=\|I-Q^\ast Q\|_2,\qquad
+R\ :=\ A_kX-XT,\quad r_{\mathrm{res}}\ :=\ \|R\|_{(r)}=\|\widetilde A Q-QT\|_2.
+\]
+Set \(S_0:=XTX^\sharp\) and \(E:=A_k-S_0\).
+\end{enumerate}
+
+\medskip
+All quantities above are obtained directly from \((Q,T)\) and diagonal scalings by \(C_r\).
+In exact arithmetic, \(Q\) is unitary so \(\delta=0\); numerically \(\delta\) is at machine scale.
+
+\begin{theorem}[From the Schur build to \(H^2(D_r)\) resolvent bounds]
+\label{thm:schur-to-resolvent}
+With the objects from the procedure above, let \(X=U H\) be the \(S_r\)-polar factorization
+(\(U^\sharp U=I\), \(H=(X^\sharp X)^{1/2}\)). Then:
+\begin{align*}
+\quad&
+\|X\|_{(r)}\le\sqrt{1+\delta},\\
+\quad&
+\|X^{-1}\|_{(r)}\le(1-\delta)^{-1/2},\\
+\quad&
+\|H\|_{(r)}\|H^{-1}\|_{(r)}\le\frac{1+\delta}{1-\delta}.\\
+\quad&
+ \ \|E\|_{(r)}\ \le\ r_{\mathrm{res}}\sqrt{1+\delta}\ +\ \|A_k\|_{(r)}\,\delta\ .\\
+\quad&
+\|(zI-S_0)^{-1}\|_{(r)}\ \le\ \frac{1+\delta}{1-\delta}\,\|(zI-T)^{-1}\|_2,\\
+\end{align*}
+And if 
+\[
+\alpha_r(z):=\|(zI-S_0)^{-1}\|_{(r)}\,\|E\|_{(r)}<1\
+\] 
+we have
+\[
+ \|(zI-A_k)^{-1}\|_{(r)}\ \le\
+\frac{\dfrac{1+\delta}{1-\delta}\,\|(zI-T)^{-1}\|_2}{\,1-\alpha_r(z)\,}\ 
+\]
+\end{theorem}
+
+\begin{proof}[Expanded proof]
+Recall $\|M\|_{(r)}:=\|C_r M C_r^{-1}\|_2$ with $C_r=\textrm{diag}(r^n)$ and $X^\sharp=S_r^{-1}X^\ast S_r$.
+
+\emph{(1) Orthogonality defect.}
+If $\|I-X^\sharp X\|_{(r)}=\delta<1$, then (Loewner order)
+\[
+(1-\delta)I\preceq X^\sharp X\preceq(1+\delta)I,
+\]
+so
+\[
+\|X\|_{(r)}^2=\|X^\sharp X\|_{(r)}\le 1+\delta,\qquad
+\|X^{-1}\|_{(r)}^{-2}=\|(X^\sharp X)^{-1}\|_{(r)}^{-1}\ge 1-\delta,
+\]
+hence
+\[
+\|X\|_{(r)}\le\sqrt{1+\delta},\qquad \|X^{-1}\|_{(r)}\le(1-\delta)^{-1/2}.
+\]
+With the $S_r$–polar $X=UH$ ($U^\sharp U=I$, $H=(X^\sharp X)^{1/2}$) we get
+\[
+\|H\|_{(r)}\|H^{-1}\|_{(r)}\le \frac{1+\delta}{1-\delta}.
+\]
+
+\emph{(2) Similarity defect (add \& subtract $A_kXX^\sharp$).}
+Define $S_0:=XTX^\sharp$ and $E:=A_k-S_0$. Then
+\[
+E= \underbrace{A_kXX^\sharp - XTX^\sharp}_{(A_kX-XT)X^\sharp}\ +\ \underbrace{A_k - A_kXX^\sharp}_{A_k(I-XX^\sharp)}.
+\]
+Taking $\|\cdot\|_{(r)}$ gives
+\[
+\|E\|_{(r)}\le \|A_kX-XT\|_{(r)}\,\|X^\sharp\|_{(r)} + \|A_k\|_{(r)}\,\|I-XX^\sharp\|_{(r)}.
+\]
+Since $\|X^\sharp\|_{(r)}=\|X\|_{(r)}\le\sqrt{1+\delta}$ and (see below) $\|I-XX^\sharp\|_{(r)}=\|I-X^\sharp X\|_{(r)}=\delta$, we obtain
+\[
+\boxed{\quad \|E\|_{(r)}\ \le\ r_{\mathrm{res}}\sqrt{1+\delta}\ +\ \|A_k\|_{(r)}\,\delta,\quad}
+\]
+with $r_{\mathrm{res}}:=\|A_kX-XT\|_{(r)}$.
+
+\emph{Why $\|I-XX^\sharp\|_{(r)}=\|I-X^\sharp X\|_{(r)}$.}
+In whitened coordinates $\widetilde X:=C_r X C_r^{-1}$,
+\[
+\|I-XX^\sharp\|_{(r)}=\|I-\widetilde X\widetilde X^\ast\|_2,\qquad
+\|I-X^\sharp X\|_{(r)}=\|I-\widetilde X^\ast\widetilde X\|_2.
+\]
+The nonzero eigenvalues of $\widetilde X\widetilde X^\ast$ and $\widetilde X^\ast\widetilde X$ are the same ($=\sigma_j(\widetilde X)^2$), so the eigenvalues of $I-$those are both $\{1-\sigma_j^2\}$; hence the spectral norms coincide.
+
+\emph{(3) Resolvent comparison.}
+With $X=UH$ we have $S_0=U(HTH)U^\sharp$, and $S_r$–unitary conjugation preserves $\|\cdot\|_{(r)}$, so
+\[
+\|(zI-S_0)^{-1}\|_{(r)}=\|(zI-HTH)^{-1}\|_{(r)}\le \|H\|_{(r)}\|H^{-1}\|_{(r)}\,\|(zI-T)^{-1}\|_2
+\le \frac{1+\delta}{1-\delta}\,\|(zI-T)^{-1}\|_2.
+\]
+
+\emph{(4) Resolvent of $A_k$.}
+Write
+\[
+zI-A_k=\big(I-(zI-S_0)^{-1}E\big)\,(zI-S_0).
+\]
+If $\alpha_r(z):=\|(zI-S_0)^{-1}\|_{(r)}\,\|E\|_{(r)}<1$, then Neumann’s lemma gives
+\[
+\|(zI-A_k)^{-1}\|_{(r)}\le \frac{\|(zI-S_0)^{-1}\|_{(r)}}{1-\alpha_r(z)}
+\le \frac{\dfrac{1+\delta}{1-\delta}\,\|(zI-T)^{-1}\|_2}{1-\alpha_r(z)}.
+\]
+\end{proof}
+
+\section{Newton--Kantorovich framework on a single Hardy space and biorthogonality}
+\label{sec:NK-single}
+
+Fix \(r\in\{1,\tfrac32\}\) and let \(L_r\) denote one of the endomorphisms
+\[
+L_1:=S\,L: H^2(D_1)\to H^2(D_1),
+\qquad
+L_{3/2}:=L\,R: H^2(D_{3/2})\to H^2(D_{3/2}),
+\]
+so that \(\|L_r\|\le C_2\) and any Galerkin compression \(A_k\) satisfies
+\(\|A_k\|_{(r)}\le \|L_r\|\le C_2\) (Remark~\ref{rem:Ak-norms} below).
+We assume \(\lambda\in\sigma(L_r)\setminus\{0\}\) is \emph{simple}.
+
+\subsection*{Nonlinear map and biorthogonal normalization}
+For a bounded \(M:H^2(D_r)\to H^2(D_r)\) define
+\[
+F_M(z,v)\ :=\ \big(Mv-zv,\ \ell(v)-1\big),\qquad (z,v)\in\mathbb C\times H^2(D_r),
+\]
+with a fixed linear functional \(\ell\in (H^2(D_r))^\ast\) used to pin phase/scale.
+We take \(\ell\) from the \emph{discretization}: if \(A_k v_A=\lambda_A v_A\) and
+\(u_A^\sharp A_k=\lambda_A u_A^\sharp\) are right/left eigenvectors, normalize by
+\(\langle u_A,v_A\rangle_r=1\) and set \(\ell(\cdot)=\langle u_A,\cdot\rangle_r\).
+Thus \(F_{A_k}(\lambda_A,v_A)=0\) and \(\ell(v_A)=1\).
+
+\subsection*{Exact inverse of the linearization at a simple eigenpair}
+Let \(P_A:=v_A\otimes u_A\) and \(Q_A:=I-P_A\).
+Then for the derivative at \((\lambda_A,v_A)\),
+\[
+DF_{A_k}(\lambda_A,v_A)[\delta z,\delta v]
+=\big((A_k-\lambda_A)\delta v-\delta z\,v_A,\ \langle u_A,\delta v\rangle_r\big).
+\]
+If \(\lambda_A\) is simple, the restriction
+\((A_k-\lambda_A)|_{Q_A}:Q_AH^2(D_r)\to Q_AH^2(D_r)\) is invertible and
+\[
+\boxed{\quad
+DF_{A_k}(\lambda_A,v_A)^{-1}(a,b)
+= \big(\ -\langle u_A,a\rangle_r,\ \ b\,v_A + \underbrace{(A_k-\lambda_A)|_{Q_A}^{-1}Q_A a}_{=:~S_A a}\ \big).
+\quad}
+\]
+Hence, with the product norm \(\|(a,b)\|:=\|a\|_{(r)}+|b|\),
+\[
+\|DF_{A_k}^{-1}\|\ \le\ \max\big\{\ \|u_A\|_{(r)}+\|S_A\|\ ,\ \|v_A\|_{(r)}\ \big\}.
+\]
+If \(\Gamma\) is a circle centered at \(\lambda_A\) that contains no other spectrum of \(A_k\),
+then the \emph{reduced resolvent} obeys
+\[
+S_A=\frac{1}{2\pi i}\int_\Gamma \frac{1}{z-\lambda_A}\,(zI-A_k)^{-1}\,dz,
+\qquad
+\Rightarrow\quad
+\boxed{\ \ \|S_A\|\ \le\ \sup_{z\in\Gamma}\|(zI-A_k)^{-1}\|_{(r)}\ .\ }
+\]
+
+\subsection*{Newton--Kantorovich transfer to $L_r$ (same space)}
+Let \((\lambda,v)\) be the (normalized) simple eigenpair of \(L_r\) with
+\(\ell(v)=1\) and \(L_r v=\lambda v\). Consider the Newton maps
+\(N_{A_k}:=(\mathrm{id}-DF_{A_k}^{-1}F_{A_k})\) and \(N_{L_r}\).
+If \(N_{A_k}\) is a contraction on a ball around \((\lambda_A,v_A)\) with constant \(\kappa<1\),
+then (telescoping at the fixed points and using \(F_{L_r}(\lambda,v)=0\)) we get
+\[
+\big\|(\lambda_A,v_A)-(\lambda,v)\big\|
+\ \le\ \frac{1}{1-\kappa}\ \|DF_{A_k}^{-1}\|\ \|(A_k-L_r)v\|_{(r)}.
+\]
+Thus, using \(\|(A_k-L_r)v\|\le \|A_k-L_r\|\,\|v\|\),
+\[
+\boxed{\quad
+\big\|(\lambda_A,v_A)-(\lambda,v)\big\|
+\ \le\ \frac{\|DF_{A_k}^{-1}\|}{1-\kappa}\ \|A_k-L_r\|_{(r)}\ \|v\|_{(r)}.
+\quad}
+\]
+
+Now, 
+
+In particular, if \(A_k\) is a Galerkin compression produced by range/domain truncation,
+then (Corollary~\ref{cor:one-sided-approxs})
+\[
+\|A_k-L_1\|_{(1)}\ \le\ C_2\Bigl(\tfrac{2}{3}\Bigr)^{K+1},
+\qquad
+\|A_k-L_{3/2}\|_{(3/2)}\ \le\ C_2\Bigl(\tfrac{2}{3}\Bigr)^{k+1},
+\]
+and the right-hand side decays geometrically with \(K\) (or \(k\)).
+
+\begin{remark}[Using resolvent bounds for \(\|DF_{A_k}^{-1}\|\)]
+If \(\Gamma\) is a circle around \(\lambda_A\) with no other eigenvalues of \(A_k\), then
+\[
+\|DF_{A_k}^{-1}\|
+\ \le\ \max\Big\{\ \|u_A\|_{(r)} + \sup_{z\in\Gamma}\|(zI-A_k)^{-1}\|_{(r)}\ ,\ \|v_A\|_{(r)}\ \Big\}.
+\]
+Both \(\|v_A\|\) and \(\|u_A\|\) are computable from the Schur build in \(H^2(D_r)\),
+and the resolvent supremum on \(\Gamma\) admits certified bounds via
+Theorem~\ref{thm:schur-to-resolvent}.
+\end{remark}
+
+\begin{remark}[Norm control of the discretizations]\label{rem:Ak-norms}
+If \(A_k\) is the \(H^2(D_r)\)-orthogonal compression of \(L_r\) onto
+\(\mathcal V_N=\mathrm{span}\{(w-1)^n\}_{n=0}^{N-1}\), then
+\[
+\|A_k\|_{(r)}\ \le\ \|L_r\|\ \le\ C_2,\qquad r\in\{1,\tfrac32\}.
+\]
+Indeed, \(\|L_1\|\le \|S\|\,\|L\|=C_2\) and \(\|L_{3/2}\|\le \|L\|\,\|R\|=C_2\)
+with \(\|R\|=\|S\|=1\), and orthogonal compression does not increase the operator norm.
+\end{remark}
+
+\paragraph{Replacing $\|v\|_{(r)}$ in the NK bound.}
+In the single–space framework of Section~\ref{sec:NK-single} we derived
+\[
+\big\|(\lambda_A,v_A)-(\lambda,v)\big\|
+\ \le\ \frac{\|DF_{A_k}^{-1}\|}{1-\kappa}\ \|A_k-L_r\|_{(r)}\ \|v\|_{(r)}.
+\tag{$\ast$}
+\]
+There are two convenient ways to control $\|v\|_{(r)}$:
+
+\smallskip
+\noindent\emph{(A) Same–space normalization (recommended).}
+Normalize the true eigenvector in the working space: $\|v\|_{(r)}=1$.
+Then $(\ast)$ becomes
+\[
+\big\|(\lambda_A,v_A)-(\lambda,v)\big\|
+\ \le\ \frac{\|DF_{A_k}^{-1}\|}{1-\kappa}\ \|A_k-L_r\|_{(r)}.
+\]
+
+\smallskip
+\noindent\emph{(B) Weak-to-strong conversion (when the target normalization is in $H^2(D_1)$).}
+Suppose $r=\tfrac32$ but you keep the weak normalization $\|v\|_{H^2(D_1)}=1$.
+By Proposition~\ref{prop:strong-from-weak},
+\[
+\|v\|_{(3/2)}=\|v\|_{H^2(D_{3/2})}\ \le\ \frac{C_2}{|\lambda|}\,\|v\|_{H^2(D_1)}
+\ =\ \frac{C_2}{|\lambda|}.
+\]
+Plugging this into $(\ast)$ with $r=\tfrac32$ yields the one–norm estimate
+\[
+\boxed{\qquad
+\big\|(\lambda_A,v_A)-(\lambda,v)\big\|
+\ \le\ \frac{C_2}{(1-\kappa)\,|\lambda|}\ \|DF_{A_k}^{-1}\|\ \|A_k-L_{3/2}\|_{(3/2)}.
+\qquad}
+\]
+(The same argument shows $\|v\|_{(3/2)}\le (C_2/|\lambda|)\|v\|_{(1)}$ for any scaling.)
+
+
+
+\section{Polynomials of operators on \texorpdfstring{$H^2(D_r)$}{H2(Dr)}}
+\label{sec:poly-single}
+
+Fix \(r\in\{1,\tfrac32\}\) and write \(L_r\in\mathcal B(H^2(D_r))\) for either endomorphism
+\(L_1=SL\) or \(L_{3/2}=LR\) (so \(\|L_r\|\le C_2\)).
+Let \(A_k\) be a Galerkin compression on \(\mathcal V_N=\mathrm{span}\{(w-1)^n\}_{n=0}^{N-1}\),
+and set the single–space discretization error
+\[
+\varepsilon_r\ :=\ \|L_r-A_k\|_{(r)}.
+\]
+
+\subsection{Polynomial perturbation in one norm}
+Let \(p(z)=\sum_{j=1}^{d} a_j z^j\) with \(p(0)=0\).
+A telescoping expansion gives
+\[
+p(L_r)-p(A_k)
+=\sum_{j=1}^{d} a_j \sum_{\ell=0}^{j-1}
+A_k^{\,\ell}\,(L_r-A_k)\,L_r^{\,j-1-\ell},
+\]
+hence
+\begin{equation}\label{eq:poly-perturb-single}
+\boxed{\quad
+\|p(L_r)-p(A_k)\|_{(r)}
+\ \le\ \varepsilon_r\,
+\underbrace{\sum_{j=1}^{d} |a_j|\sum_{\ell=0}^{j-1}
+\|A_k\|_{(r)}^{\ell}\,\|L_r\|_{(r)}^{\,j-1-\ell}}_{=:~\mathfrak C_r(p;A_k,L_r)}.
+\quad}
+\end{equation}
+Crude but convenient: using \(\|A_k\|_{(r)},\|L_r\|_{(r)}\le C_2\),
+\begin{equation}\label{eq:poly-perturb-C2}
+\|p(L_r)-p(A_k)\|_{(r)}
+\ \le\ \varepsilon_r \sum_{j=1}^{d} |a_j|\,j\,C_2^{\,j-1}.
+\end{equation}
+
+\subsection{Resolvent transfer for polynomials (same space)}
+\begin{lemma}[Single–space resolvent transfer]\label{lem:resolvent-transfer-single}
+Fix a contour \(\Gamma\subset\mathbb{C}\). Let
+\[
+M_r\ :=\ \sup_{z\in\Gamma}\|(zI-p(A_k))^{-1}\|_{(r)},
+\qquad
+\varepsilon_{p,r}\ :=\ \|p(L_r)-p(A_k)\|_{(r)}.
+\]
+If \(\varepsilon_{p,r}\,M_r<1\), then \(\Gamma\subset\rho(p(L_r))\) and
+\[
+\sup_{z\in\Gamma}\|(zI-p(L_r))^{-1}\|_{(r)}
+\ \le\ \frac{M_r}{\,1-\varepsilon_{p,r} M_r\,}.
+\]
+\end{lemma}
+
+\begin{proof}[Sketch]
+Resolvent identity:
+\(z-p(L_r)=\big[I-(p(L_r)-p(A_k))(z-p(A_k))^{-1}\big]\,(z-p(A_k))\).
+Apply Neumann’s lemma when \(\varepsilon_{p,r}M_r<1\).
+\end{proof}
+
+\subsection{Computing \texorpdfstring{$M_r$}{Mr} from a Schur build of \texorpdfstring{$A_k$}{Ak}}
+Use the \(H^2(D_r)\) Schur procedure of Section~\ref{sec:schur-centered}:
+whiten \(A_k\) by \(C_r\), compute the Schur pair \(\widetilde A Q=QT\), set \(X=C_r^{-1}Q\),
+\(\delta=\|I-X^\sharp X\|_{(r)}\) and \(r_{\mathrm{res}}=\|A_kX-XT\|_{(r)}\).
+Since \(p\) is a polynomial,
+\[
+p(S_0)=X\,p(T)\,X^\sharp,\qquad S_0:=XTX^\sharp.
+\]
+Define \(E_p:=p(A_k)-p(S_0)\). Arguing as in Theorem~\ref{thm:schur-to-resolvent},
+\[
+\|(zI-p(S_0))^{-1}\|_{(r)}\ \le\ \frac{1+\delta}{1-\delta}\ \|(zI-p(T))^{-1}\|_2,
+\]
+and, by the same add–subtract trick used for \(E\),
+\begin{equation}\label{eq:poly-sim-defect}
+\|E_p\|_{(r)}\ \le\ \sqrt{1+\delta}\,\sum_{j=1}^d |a_j|
+\sum_{\ell=0}^{j-1} \|A_k\|_{(r)}^{\ell}\, r_{\mathrm{res}}\ \|T\|_2^{\,j-1-\ell}
+\ +\ \delta\,\|p(A_k)\|_{(r)}.
+\end{equation}
+If \(\alpha_p(z):=\|(zI-p(S_0))^{-1}\|_{(r)}\,\|E_p\|_{(r)}<1\), then
+\[
+\boxed{\quad
+\|(zI-p(A_k))^{-1}\|_{(r)}
+\ \le\ \frac{\dfrac{1+\delta}{1-\delta}\,\|(zI-p(T))^{-1}\|_2}{1-\alpha_p(z)}\ =:\ M_r(z),
+\quad}
+\]
+and \(M_r:=\sup_{z\in\Gamma}M_r(z)\) is a certified bound for Lemma~\ref{lem:resolvent-transfer-single}.
+In exact arithmetic \(Q\) is unitary in the whitened metric (\(\delta=0\), \(r_{\mathrm{res}}=0\)) and
+\(\|(zI-p(A_k))^{-1}\|_{(r)}=\|(zI-p(T))^{-1}\|_2\).
+
+\subsection{Deflation polynomials and isolation}
+Let \(\{\lambda_i\}\) be the Schur–ordered eigenvalues of \(A_k\) (in \(H^2(D_r)\)).
+Suppose \(\{\widehat\lambda_i\}_{i<j}\) are certified. Define the deflation polynomial
+\[
+P_j(z):=\prod_{i=1}^{j-1}\Bigl(1-\frac{z}{\widehat\lambda_i}\Bigr),\qquad
+\alpha_j:=\frac{1}{P_j(\lambda_j)},\qquad
+p(z):=\bigl(\alpha_j P_j(z)\bigr)^q,
+\]
+with the minimal integer \(q\ge1\) that yields the desired order of vanishing at the
+already certified set while keeping \(p(\lambda_j)\approx1\).
+Then the spectrum of \(p(A_k)\) has one point near \(1\) (image of \(\lambda_j\))
+and the rest contracted toward \(0\). Any small circle \(\Gamma=\{z:|z-1|=r\}\) that
+excludes the other images isolates the target.
+
+\subsection{Projectors commute with polynomials}
+If \(\Gamma\) encloses a single eigenvalue of \(A_k\) (or \(L_r\)), then the Riesz
+projector is invariant under polynomial change:
+\[
+\Pi=\frac{1}{2\pi i}\int_\Gamma (z-A)^{-1}\,dz
+=\frac{1}{2\pi i}\int_{p(\Gamma)} (w-p(A))^{-1}\,dw,
+\]
+provided \(p\) is injective on the enclosed component. Thus one may compute
+\(\widehat\Pi_j\) from \(p(A_k)\) and transfer it to \(p(L_r)\) via
+Lemma~\ref{lem:resolvent-transfer-single}; mapping back through the local inverse of
+\(p\) yields the certified eigenvalue and projector for \(L_r\).
+
+\subsection{Practical pipeline on \texorpdfstring{$H^2(D_r)$}{H2(Dr)}}
+\begin{enumerate}
+\item \textbf{Schur build for \(A_k\).} Whiten by \(C_r\), compute \(\widetilde A Q=QT\),
+set \(X=C_r^{-1}Q\), measure \(\delta, r_{\mathrm{res}}\).
+\item \textbf{Choose \(p\).} Deflate previously certified modes; take minimal \(q\).
+\item \textbf{Bound \(M_r\).} Use \eqref{eq:poly-sim-defect} and the resolvent bound with \(p(T)\)
+to certify \(M_r=\sup_{z\in\Gamma}\|(zI-p(A_k))^{-1}\|_{(r)}\).
+\item \textbf{Bound \(\varepsilon_{p,r}\).} Use \eqref{eq:poly-perturb-single} (or the crude
+\eqref{eq:poly-perturb-C2} if desired) with \(\varepsilon_r=\|L_r-A_k\|_{(r)}\).
+\item \textbf{Transfer.} Check \(\varepsilon_{p,r} M_r<1\). Then
+\[
+\sup_{z\in\Gamma}\|(zI-p(L_r))^{-1}\|_{(r)}\ \le\ \frac{M_r}{1-\varepsilon_{p,r}M_r},
+\]
+so \(\Gamma\subset\rho(p(L_r))\) and the projector is well defined with matching multiplicity.
+\item \textbf{Back–map.} Use the local inverse of \(p\) at the image of \(\lambda_j\) to enclose
+\(\lambda_j\in\sigma(L_r)\) and recover the projector on \(H^2(D_r)\).
+\end{enumerate}
+
+\begin{remark}[Constants you actually need]
+All inputs are single–space: \(C_2\) (for crude bounds), the discretization error
+\(\varepsilon_r=\|L_r-A_k\|_{(r)}\) (from your one–sided truncation bounds),
+the Schur defects \(\delta, r_{\mathrm{res}}\), and the triangular resolvent
+\(\|(zI-p(T))^{-1}\|_2\). No cross–norms or embeddings are required.
+\end{remark}
+
+
+
+
+\section{Outlook}
+This framework couples Hardy-space analysis and validated numerics.
+The same operator \(L_s\) for complex \(s\) yields
+\(\det(I-L_s)^{-1}=\zeta(2s)\),
+forming the analytic basis for a companion paper.
+
+\begin{remark}[Connection with the Markov and Lagrange spectra]
+The parameter \(s\) in the Gauss--Kuzmin--Wirsing operator
+\[
+(L_s f)(w)=\sum_{n\ge1}\frac{1}{(w+n)^{2s}}f\!\left(\frac{1}{w+n}\right)
+\]
+acts as a thermodynamic deformation of the Gauss map potential.
+At \(s=1\), the operator describes the statistical law of continued fractions
+and governs the convergence of the empirical distribution functions \(F_n\).
+As \(s\) decreases towards \(1/2\), the leading eigenvalue
+\(\lambda_1(s)=e^{P(2s)}\)
+traces the topological pressure \(P(2s)\),
+whose zero determines the Hausdorff dimension
+of sets of numbers with bounded continued fractions:
+\[
+P(2D)=0,\qquad D\approx0.53128.
+\]
+This critical value \(D\) marks the onset of the
+Markov--Lagrange spectrum.
+Hence the same analytic family \(L_s\)
+interpolates between the probabilistic regime (\(s=1\))
+and the geometric--Diophantine regime (\(s=D\)),
+linking the Gauss problem with the classical spectra of Diophantine approximation.
+\end{remark}
+
+\section{Appendix: Pseudospectral approach to the enclosure of eigenvalues strong-weak framework}
+
+Recall that $L:H^2(D_1)\to H^2(D_{3/2})$ is bounded with
+\[
+\|L\|_{H^2(D_1)\to H^2(D_{3/2})}\ \le\ C_2.
+\]
+(For instance, one can take $C_2$ from Theorem~\ref{thm:L1-H2-bound}.)
+
+\begin{proposition}[Strong norm from weak norm for eigenvectors]
+\label{prop:strong-from-weak}
+Let $(\lambda,\varphi)$ be a (nonzero) eigenpair of $L$ with
+$\varphi\in H^2(D_1)\cap H^2(D_{3/2})$ and $L\varphi=\lambda\varphi$.
+Then
+\[
+\boxed{\qquad
+\|\varphi\|_{H^2(D_{3/2})}
+\ \le\ \frac{C_2}{|\lambda|}\,\|\varphi\|_{H^2(D_1)}.
+\qquad}
+\]
+In particular, under the normalization $\|\varphi\|_{H^2(D_1)}=1$,
+\[
+\|\varphi\|_{H^2(D_{3/2})}\ \le\ \frac{C_2}{|\lambda|}.
+\]
+\end{proposition}
+
+\begin{proof}
+Since $L\varphi=\lambda\varphi$ and $L:H^2(D_1)\to H^2(D_{3/2})$,
+\[
+\|\varphi\|_{H^2(D_{3/2})}
+=\frac{1}{|\lambda|}\,\|L\varphi\|_{H^2(D_{3/2})}
+\le \frac{C_2}{|\lambda|}\,\|\varphi\|_{H^2(D_1)}.
+\]
+\end{proof}
+
+We now combine Proposition~\ref{prop:strong-from-weak} with a resolvent
+estimate to obtain an exclosure for $\sigma(L)$ from a finite-rank
+approximation $L_k$.
+
+\begin{proposition}\label{prop:pseudo-exclosure-correct}
+Let $L_k$ be a finite-rank operator such that
+\[
+\|L-L_k\|_{H^{2}(D_{3/2})\to H^{2}(D_{1})} \le \eta.
+\]
+If $\lambda\in\sigma(L)$ and $\lambda\notin\sigma(L_k)$, then
+\[
+\bigl\|(\lambda - L_k)^{-1}\bigr\|_{H^{2}(D_{1})\to H^{2}(D_{1})}
+\ \ge\ \frac{|\lambda|}{C_2\,\eta}.
+\]
+Equivalently,
+\[
+\sigma(L)\ \subset\
+\left\{\, z\in\mathbb C\ \middle|\ 
+\bigl\|(z - L_k)^{-1}\bigr\|_{H^{2}(D_{1})\to H^{2}(D_{1})}
+\ \ge\ \frac{|z|}{C_2\,\eta}\right\}.
+\]
+Consequently, any region where
+$\|(z-L_k)^{-1}\|_{H^{2}(D_{1})}\le 1/\delta$ with $\delta>\frac{C_2\,\eta}{|z|}$
+is free of eigenvalues of $L$.
+\end{proposition}
+
+\begin{proof}
+Let $(\lambda,\varphi)$ be an eigenpair with $\varphi\neq 0$ and
+$\varphi\in H^2(D_1)\cap H^2(D_{3/2})$. Then
+\[
+(\lambda - L_k)\varphi = (L - L_k)\varphi,
+\]
+so, assuming $\lambda\notin\sigma(L_k)$,
+\[
+\varphi \;=\; (\lambda - L_k)^{-1}(L - L_k)\varphi.
+\]
+Taking the $H^2(D_1)$-norm and using
+$\|L-L_k\|_{H^{2}(D_{3/2})\to H^{2}(D_{1})}\le\eta$ gives
+\[
+\|\varphi\|_{H^2(D_1)}
+\;\le\;
+\bigl\|(\lambda - L_k)^{-1}\bigr\|_{H^{2}(D_{1})\to H^{2}(D_{1})}\;
+\eta\;\|\varphi\|_{H^2(D_{3/2})}.
+\]
+Apply Proposition~\ref{prop:strong-from-weak} to bound
+$\|\varphi\|_{H^2(D_{3/2})}\le (C_2/|\lambda|)\,\|\varphi\|_{H^2(D_1)}$ and cancel
+$\|\varphi\|_{H^2(D_1)}\neq 0$ to obtain
+\(
+1 \le \bigl\|(\lambda - L_k)^{-1}\bigr\|\;\eta\; (C_2/|\lambda|),
+\)
+i.e.
+\(
+\bigl\|(\lambda - L_k)^{-1}\bigr\|
+\ge |\lambda|/(C_2\,\eta).
+\)
+The set inclusion and the exclosure statement follow by contraposition.
+\end{proof}
+
+\begin{lemma}[Energy inequality for the resolvent equation]
+\label{lem:energy-ineq}
+Let $(\mathcal B_s,\|\cdot\|_s)\hookrightarrow(\mathcal B_w,\|\cdot\|_w)$ be a Banach couple
+and suppose $P:\mathcal B_s\to\mathcal B_s$ satisfies the strong Lasota--Yorke estimate
+\[
+\|Pu\|_s \le a\,\|u\|_s + b\,\|u\|_w, \qquad a,b\ge0.
+\]
+Fix $z\in\rho(P)$ and let $u\in\mathcal B_s$ solve the resolvent equation
+\[
+(zI-P)u = f, \qquad f\in\mathcal B_s.
+\]
+Then the solution obeys the \emph{energy inequality}
+\[
+\boxed{\ (|z|-a)\,\|u\|_s \;\le\; b\,\|u\|_w \;+\; \|f\|_s.\ }
+\]
+In particular, the strong norm of $u$ is controlled by its weak norm and the data $f$.
+\end{lemma}
+
+\begin{proof}
+From $(zI-P)u=f$ we have
+\[
+|z|\,\|u\|_s \le \|Pu\|_s + \|f\|_s.
+\]
+Applying the Lasota--Yorke bound gives
+\[
+|z|\,\|u\|_s \le a\,\|u\|_s + b\,\|u\|_w + \|f\|_s,
+\]
+and rearranging yields the claimed inequality.
+\end{proof}
+
+\begin{proposition}
+\label{prop:weak-to-strong-bridge}
+Let $(\mathcal B_s,\|\cdot\|_s)\hookrightarrow(\mathcal B_w,\|\cdot\|_w)$ with continuous embedding
+$i:\mathcal B_s\to\mathcal B_w$ of norm $E_{s\to w}=\|i\|_{s\to w}$.
+Assume $P,P_k:\mathcal B_s\to\mathcal B_s$ satisfy the Lasota--Yorke bounds
+\[
+\|Pu\|_s \le a\,\|u\|_s + b\,\|u\|_w, \qquad
+\|Pu\|_w \le M\,\|u\|_w,
+\]
+and let $\delta:=\|P-P_k\|_{s\to w}$.
+Suppose for $z\notin\sigma(P_k)$ we have a weak resolvent bound
+\[
+M_k(z):=\|(zI-P_k)^{-1}\|_{w\to w} < \infty.
+\]
+If
+\[
+|z| > a + b\,M_k(z)\,\delta,
+\]
+then $z\notin\sigma(P)$ and the resolvent $R(z)=(zI-P)^{-1}$
+satisfies the quantitative estimate
+\[
+\boxed{\;
+\|R(z)\|_{s\to s}
+\ \le\
+\frac{\,b\,M_k(z)\,E_{s\to w} + 1\,}{\,|z|-a - b\,M_k(z)\,\delta\,}.
+\;}
+\]
+\end{proposition}
+
+\begin{proof}
+Let $R_k(z)=(zI-P_k)^{-1}$ and fix $f\in\mathcal B_s$ with $\|f\|_s=1$.
+Set $u=R(z)f$, so that $(zI-P)u=f$ and hence
+\[
+u = R_k(z)f + R_k(z)(P-P_k)u.
+\]
+Taking weak norms gives
+\[
+\|u\|_w
+ \le M_k(z)\,\|f\|_w + M_k(z)\,\|(P-P_k)u\|_w
+ \le M_k(z)\,E_{s\to w} + M_k(z)\,\delta\,\|u\|_s.
+\]
+Apply Lemma~\ref{lem:energy-ineq} to $(zI-P)u=f$:
+\[
+(|z|-a)\,\|u\|_s \le b\,\|u\|_w + 1.
+\]
+Combining the two inequalities yields
+\[
+(|z|-a)\,\|u\|_s \le b M_k(z)\,E_{s\to w} + b M_k(z)\,\delta\,\|u\|_s + 1,
+\]
+collecting terms,
+\[
+\big(|z|-a - b\,M_k(z)\,\delta\big)\,\|u\|_s
+   \le b\,M_k(z)\,E_{s\to w} + 1.
+\]
+If $|z|>a+b\,M_k(z)\,\delta$, divide through to obtain the bound;
+taking the supremum over $\|f\|_s=1$ gives the stated estimate.
+\end{proof}
+
+
+
+
+\bibliographystyle{plain}
+\bibliography{refs}
+\end{document}
