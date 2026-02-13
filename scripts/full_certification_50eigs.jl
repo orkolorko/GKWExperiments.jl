@@ -17,6 +17,10 @@
 # Usage:
 #   julia --project --startup-file=no scripts/full_certification_50eigs.jl
 
+using Distributed
+const N_WORKERS = 14        # 16 cores → 14 workers + main process + OS
+addprocs(N_WORKERS; exeflags="--project=$(Base.active_project())")
+
 using GKWExperiments
 using ArbNumerics
 using BallArithmetic
@@ -25,6 +29,8 @@ using LinearAlgebra
 using Printf
 using Serialization
 using Dates
+
+@info "Launched $N_WORKERS workers: $(workers())"
 
 # Access internal helper for rigorous Arb → Float64 conversion
 const _arb_to_float64_upper = GKWExperiments.NewtonKantorovichCertification._arb_to_float64_upper
@@ -251,7 +257,7 @@ for K_level in K_levels
 
         local cert_data
         try
-            cert_data = run_certification(A_ball_k, circle; schur_data=sd_k)
+            cert_data = run_certification(A_ball_k, circle, workers(); schur_data=sd_k)
         catch e
             @warn "  j=$i: resolvent certification threw error: $(typeof(e))"
             continue
@@ -385,7 +391,7 @@ if !isempty(uncertified)
             try
                 circle_bf = CertificationCircle(ComplexF64(λ_center), r_circle_bf; samples=CIRCLE_SAMPLES)
                 t_bf = time()
-                cert_bf = run_certification(A_ball_bf, circle_bf; schur_data=sd_bf)
+                cert_bf = run_certification(A_ball_bf, circle_bf, workers(); schur_data=sd_bf)
                 dt_bf = time() - t_bf
             catch e
                 @warn "  j=$i: BigFloat resolvent failed at K=$bf_K: $(typeof(e))"
@@ -504,7 +510,7 @@ for K_level in K_levels
     local cert_tail, dt_tail
     try
         t_tail = time()
-        cert_tail = run_certification(A_ball_k, circle_tail; schur_data=sd_tail_k)
+        cert_tail = run_certification(A_ball_k, circle_tail, workers(); schur_data=sd_tail_k)
         dt_tail = time() - t_tail
     catch e
         @warn "  Tail resolvent failed at K=$K_level: $(typeof(e))"
@@ -573,7 +579,7 @@ if !tail_certified
         circle_tail_bf = CertificationCircle(ComplexF64(0.0), ρ_tail; samples=CIRCLE_SAMPLES)
         try
             t_tail_bf = time()
-            cert_tail_bf = run_certification(A_ball_bf_tail, circle_tail_bf; schur_data=sd_tail_bf)
+            cert_tail_bf = run_certification(A_ball_bf_tail, circle_tail_bf, workers(); schur_data=sd_tail_bf)
             dt_tail_bf = time() - t_tail_bf
 
             global tail_resolvent_Ak = Float64(cert_tail_bf.resolvent_original)
