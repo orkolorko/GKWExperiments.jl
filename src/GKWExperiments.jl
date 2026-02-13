@@ -53,7 +53,7 @@ export poly_bridge_constant_powers_from_coeffs, poly_perturbation_bound_powers_f
 include("GKWDiscretization.jl")
 using .GKWDiscretization
 export zeta_shift_table_on_circle, values_Ls_fk_from_table!
-export coeffs_from_boundary, build_Ls_matrix_arb, gkw_matrix_direct
+export coeffs_from_boundary, build_Ls_matrix_arb, gkw_matrix_direct, gkw_matrix_direct_fast
 
 # Polynomial utilities for eigenvalue certification
 include("Polynomials.jl")

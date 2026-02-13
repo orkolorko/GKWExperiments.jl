@@ -122,7 +122,7 @@ else
     s = ArbComplex(1.0, 0.0)
     @info "Building GKW matrix at K=$K in ArbNumerics (precision=$PRECISION)..."
     t0 = time()
-    M_arb = gkw_matrix_direct(s; K=K)
+    M_arb = gkw_matrix_direct_fast(s; K=K, threaded=true)
     dt = round(time()-t0, digits=1)
     @info "  Built in $(dt)s"
 
