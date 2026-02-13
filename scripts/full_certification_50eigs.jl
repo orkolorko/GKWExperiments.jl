@@ -20,6 +20,7 @@
 using GKWExperiments
 using ArbNumerics
 using BallArithmetic
+using GenericSchur          # enables direct BigFloat Schur in run_certification
 using LinearAlgebra
 using Printf
 using Serialization
@@ -214,9 +215,20 @@ for K_level in K_levels
 
     eps_K = eps_K_table[K_level]
 
+    # Compute Schur data ONCE for this K level, reuse for all circles
+    @info "  Computing Schur data for K=$K_level (done once, reused for all circles)..."
+    t_schur = time()
+    local sd_k
+    try
+        sd_k = BallArithmetic.CertifScripts.compute_schur_and_error(A_ball_k)
+    catch e
+        @warn "  Schur computation failed at K=$K_level: $(typeof(e)): $e"
+        continue
+    end
+    @info "  Schur done in $(round(time()-t_schur, digits=1))s"
+
     # Eigenvalue locations from this matrix's Schur
-    A_center_k = BallArithmetic.mid(A_ball_k)
-    S_k = schur(A_center_k)
+    S_k = sd_k[1]
     λ_k = diag(S_k.T)
     sorted_idx_k = sortperm(abs.(λ_k), rev=true)
 
@@ -239,7 +251,7 @@ for K_level in K_levels
 
         local cert_data
         try
-            cert_data = run_certification(A_ball_k, circle)
+            cert_data = run_certification(A_ball_k, circle; schur_data=sd_k)
         catch e
             @warn "  j=$i: resolvent certification threw error: $(typeof(e))"
             continue
@@ -345,6 +357,18 @@ if !isempty(uncertified)
         end
         @printf("  ε_{%d} = %.6e\n", bf_K, eps_K_bf)
 
+        # Compute BigFloat Schur data ONCE (uses GenericSchur for direct BigFloat path)
+        @info "  Computing BigFloat Schur data for K=$bf_K (done once, reused for all circles)..."
+        t_schur_bf = time()
+        local sd_bf
+        try
+            sd_bf = BallArithmetic.CertifScripts.compute_schur_and_error(A_ball_bf)
+        catch e
+            @warn "  BigFloat Schur computation failed at K=$bf_K: $(typeof(e)): $e"
+            continue
+        end
+        @info "  BigFloat Schur done in $(round(time()-t_schur_bf, digits=1))s"
+
         newly_certified_bf = Int[]
         for i in copy(uncertified)
             # Eigenvalue center
@@ -361,7 +385,7 @@ if !isempty(uncertified)
             try
                 circle_bf = CertificationCircle(ComplexF64(λ_center), r_circle_bf; samples=CIRCLE_SAMPLES)
                 t_bf = time()
-                cert_bf = run_certification(A_ball_bf, circle_bf)
+                cert_bf = run_certification(A_ball_bf, circle_bf; schur_data=sd_bf)
                 dt_bf = time() - t_bf
             catch e
                 @warn "  j=$i: BigFloat resolvent failed at K=$bf_K: $(typeof(e))"
@@ -468,10 +492,19 @@ for K_level in K_levels
     @info "Tail bound: trying K=$K_level..."
     circle_tail = CertificationCircle(ComplexF64(0.0), ρ_tail; samples=CIRCLE_SAMPLES)
 
+    # Compute Schur data once for tail bound at this K
+    local sd_tail_k
+    try
+        sd_tail_k = BallArithmetic.CertifScripts.compute_schur_and_error(A_ball_k)
+    catch e
+        @warn "  Tail Schur failed at K=$K_level: $(typeof(e))"
+        continue
+    end
+
     local cert_tail, dt_tail
     try
         t_tail = time()
-        cert_tail = run_certification(A_ball_k, circle_tail)
+        cert_tail = run_certification(A_ball_k, circle_tail; schur_data=sd_tail_k)
         dt_tail = time() - t_tail
     catch e
         @warn "  Tail resolvent failed at K=$K_level: $(typeof(e))"
@@ -525,10 +558,22 @@ if !tail_certified
             _arb_to_float64_upper(compute_Δ(bf_K; N=N_SPLITTING))
         end
 
+        # Compute BigFloat Schur for tail bound (uses GenericSchur)
+        @info "  Computing BigFloat Schur for tail bound at K=$bf_K..."
+        local sd_tail_bf
+        try
+            t_schur_tail = time()
+            sd_tail_bf = BallArithmetic.CertifScripts.compute_schur_and_error(A_ball_bf_tail)
+            @info "  BigFloat Schur for tail done in $(round(time()-t_schur_tail, digits=1))s"
+        catch e
+            @warn "  BigFloat Schur for tail failed at K=$bf_K: $(typeof(e)): $e"
+            continue
+        end
+
         circle_tail_bf = CertificationCircle(ComplexF64(0.0), ρ_tail; samples=CIRCLE_SAMPLES)
         try
             t_tail_bf = time()
-            cert_tail_bf = run_certification(A_ball_bf_tail, circle_tail_bf)
+            cert_tail_bf = run_certification(A_ball_bf_tail, circle_tail_bf; schur_data=sd_tail_bf)
             dt_tail_bf = time() - t_tail_bf
 
             global tail_resolvent_Ak = Float64(cert_tail_bf.resolvent_original)
