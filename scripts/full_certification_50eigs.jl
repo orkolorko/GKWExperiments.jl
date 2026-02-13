@@ -240,6 +240,7 @@ for K_level in K_levels
 
     # Try each uncertified eigenvalue
     newly_certified = Int[]
+    last_alpha = 0.0  # track α trend for early exit
     for i in uncertified
         # Use eigenvalue from this K's Schur decomposition
         # (more accurate for this matrix size)
@@ -252,6 +253,14 @@ for K_level in K_levels
         # Circle radius (recompute for this K's eigenvalues)
         r_circle = circle_radii[i]
 
+        # Early exit: if previous α >> 1, remaining eigenvalues (smaller |λ|)
+        # will be even worse. Skip to next K level to avoid hanging workers.
+        if last_alpha > 10.0
+            @printf("  j=%2d: SKIPPED at K=%d (previous α=%.1e >> 1, remaining deferred to higher K)\n",
+                    i, K_level, last_alpha)
+            continue
+        end
+
         circle = CertificationCircle(λ_center_k, r_circle; samples=CIRCLE_SAMPLES)
         t1 = time()
 
@@ -260,6 +269,7 @@ for K_level in K_levels
             cert_data = run_certification(A_ball_k, circle, workers(); schur_data=sd_k)
         catch e
             @warn "  j=$i: resolvent certification threw error: $(typeof(e))"
+            last_alpha = Inf  # trigger early exit for remaining
             continue
         end
         dt = time() - t1
@@ -270,6 +280,7 @@ for K_level in K_levels
         alpha = setrounding(Float64, RoundUp) do
             eps_K * resolvent_Ak
         end
+        last_alpha = alpha
 
         if alpha < 1.0
             denom = setrounding(Float64, RoundDown) do
