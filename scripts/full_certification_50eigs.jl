@@ -17,20 +17,31 @@
 # Usage:
 #   julia --project --startup-file=no scripts/full_certification_50eigs.jl
 
+using Printf
+using Dates
+
+# Force line-buffered output for log monitoring
+flush(stdout); flush(stderr)
+println("Script started: $(now())")
+flush(stdout)
+
 using Distributed
 const N_WORKERS = 14        # 16 cores → 14 workers + main process + OS
+println("Spawning $N_WORKERS workers...")
+flush(stdout)
 addprocs(N_WORKERS; exeflags="--project=$(Base.active_project())")
+println("Workers ready: $(workers())")
+flush(stdout)
 
 using GKWExperiments
 using ArbNumerics
 using BallArithmetic
 using GenericSchur          # enables direct BigFloat Schur in run_certification
 using LinearAlgebra
-using Printf
 using Serialization
-using Dates
 
-@info "Launched $N_WORKERS workers: $(workers())"
+@info "All packages loaded"
+flush(stdout); flush(stderr)
 
 # Access internal helper for rigorous Arb → Float64 conversion
 const _arb_to_float64_upper = GKWExperiments.NewtonKantorovichCertification._arb_to_float64_upper
