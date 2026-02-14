@@ -1392,7 +1392,11 @@ function certify_eigenvalue_ordschur_direct(A_f64::BallMatrix, lambda_tgt::Numbe
         end
         max_res_T11 = r11
 
-        # T₂₂: scan circle with Float64 svdbox (small entries, well-conditioned)
+        # T₂₂: scan circle with Float64 svdbox + Weyl inter-sample correction
+        d_max = setrounding(Float64, RoundUp) do
+            2.0 * circle_radius_f64 * sin(π / (2 * circle_samples))
+        end
+
         max_res_T22 = 0.0
         max_resolvent = 0.0
 
@@ -1403,11 +1407,14 @@ function certify_eigenvalue_ordschur_direct(A_f64::BallMatrix, lambda_tgt::Numbe
 
             sv22 = svdbox(T22_f64 - z_f64 * I)
             σ22_ball = sv22[end]
-            σ22_lower = max(Float64(BallArithmetic.mid(σ22_ball)) -
-                            Float64(BallArithmetic.rad(σ22_ball)), 0.0)
+            σ22_at_sample = max(Float64(BallArithmetic.mid(σ22_ball)) -
+                                Float64(BallArithmetic.rad(σ22_ball)), 0.0)
+
+            # Weyl correction for inter-sample coverage
+            σ22_lower = σ22_at_sample - d_max
 
             if σ22_lower <= 0
-                @warn "σ_min(zI-T₂₂) ≤ 0 at sample s=$s" σ22_lower
+                @warn "σ_min(zI-T₂₂) ≤ 0 after Weyl correction at s=$s" σ22_at_sample d_max
                 max_resolvent = Inf
                 break
             end
@@ -1605,7 +1612,15 @@ function certify_eigenvalue_schur_direct(A_f64::BallMatrix, schur_position::Int;
         r11 = k_block > 0 ? setrounding(Float64, RoundUp) do; 1.0 / σ11_on_circle; end : 0.0
         max_res_T11 = r11
 
-        # T₂₂: scan circle with Float64 svdbox
+        # T₂₂: scan circle with Float64 svdbox + Weyl inter-sample correction.
+        # Any point on the circle is at most d_max from the nearest sample.
+        # By Weyl: σ_min(zI-T₂₂) ≥ σ_min(z_s·I-T₂₂) - d_max for z near z_s.
+        # This ensures rigorous coverage of the full circle, not just sample points.
+        d_max = setrounding(Float64, RoundUp) do
+            2.0 * circle_radius_f64 * sin(π / (2 * circle_samples))
+        end
+        @info "T₂₂ inter-sample Weyl correction" d_max circle_samples
+
         max_res_T22 = 0.0
         max_resolvent = 0.0
 
@@ -1616,11 +1631,14 @@ function certify_eigenvalue_schur_direct(A_f64::BallMatrix, schur_position::Int;
 
             sv22 = svdbox(T22_f64 - z_f64 * I)
             σ22_ball = sv22[end]
-            σ22_lower = max(Float64(BallArithmetic.mid(σ22_ball)) -
-                            Float64(BallArithmetic.rad(σ22_ball)), 0.0)
+            σ22_at_sample = max(Float64(BallArithmetic.mid(σ22_ball)) -
+                                Float64(BallArithmetic.rad(σ22_ball)), 0.0)
+
+            # Weyl correction: rigorous lower bound for any z in this arc
+            σ22_lower = σ22_at_sample - d_max
 
             if σ22_lower <= 0
-                @warn "σ_min(zI-T₂₂) ≤ 0 at sample s=$s" σ22_lower
+                @warn "σ_min(zI-T₂₂) ≤ 0 after Weyl correction at sample s=$s" σ22_at_sample d_max
                 max_resolvent = Inf
                 break
             end
