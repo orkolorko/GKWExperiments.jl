@@ -1612,59 +1612,30 @@ function certify_eigenvalue_schur_direct(A_f64::BallMatrix, schur_position::Int;
         r11 = k_block > 0 ? setrounding(Float64, RoundUp) do; 1.0 / σ11_on_circle; end : 0.0
         max_res_T11 = r11
 
-        # T₂₂: scan circle with Float64 svdbox + Weyl inter-sample correction.
-        # Any point on the circle is at most d_max from the nearest sample.
-        # By Weyl: σ_min(zI-T₂₂) ≥ σ_min(z_s·I-T₂₂) - d_max for z near z_s.
-        # This ensures rigorous coverage of the full circle, not just sample points.
-        d_max = setrounding(Float64, RoundUp) do
-            2.0 * circle_radius_f64 * sin(π / (2 * circle_samples))
-        end
-        @info "T₂₂ inter-sample Weyl correction" d_max circle_samples
+        # T₂₂: use CertifScripts' run_certification for rigorous full-circle coverage.
+        # This handles adaptive arc refinement + Weyl inter-sample correction automatically.
+        circle_T22 = CertificationCircle(λ_tgt, circle_radius_f64; samples=circle_samples)
+        cert_T22 = run_certification(T22_f64, circle_T22; log_io=devnull)
 
-        max_res_T22 = 0.0
-        max_resolvent = 0.0
+        # resolvent_original is the rigorous upper bound on max_z ||(zI-T₂₂)⁻¹||
+        # over the FULL circle (includes adaptive arcs + Schur bridge for T₂₂).
+        max_res_T22 = cert_T22.resolvent_original
 
-        for s in 0:(circle_samples - 1)
-            θ = 2π * s / circle_samples
-            z_f64 = ComplexF64(real(λ_tgt) + circle_radius_f64 * cos(θ),
-                               imag(λ_tgt) + circle_radius_f64 * sin(θ))
+        @info "T₂₂ via CertifScripts" max_res_T22 cert_T22.resolvent_schur cert_T22.minimum_singular_value
 
-            sv22 = svdbox(T22_f64 - z_f64 * I)
-            σ22_ball = sv22[end]
-            σ22_at_sample = max(Float64(BallArithmetic.mid(σ22_ball)) -
-                                Float64(BallArithmetic.rad(σ22_ball)), 0.0)
-
-            # Weyl correction: rigorous lower bound for any z in this arc
-            σ22_lower = σ22_at_sample - d_max
-
-            if σ22_lower <= 0
-                @warn "σ_min(zI-T₂₂) ≤ 0 after Weyl correction at sample s=$s" σ22_at_sample d_max
-                max_resolvent = Inf
-                break
+        # Block triangular formula (r11 is constant via Weyl, so max is at max of 1/σ₂₂):
+        # max_z f(z) = r11 · (1 + T12_norm · max_res_T22) + max_res_T22
+        if k_block > 0
+            max_resolvent = setrounding(Float64, RoundUp) do
+                r11 * (1.0 + T12_norm * max_res_T22) + max_res_T22
             end
-
-            # Block triangular resolvent formula
-            if k_block > 0
-                res_z = setrounding(Float64, RoundUp) do
-                    inv_σ22 = 1.0 / σ22_lower
-                    r11 * (1.0 + T12_norm * inv_σ22) + inv_σ22
-                end
-            else
-                res_z = setrounding(Float64, RoundUp) do
-                    1.0 / σ22_lower
-                end
-            end
-
-            r22 = setrounding(Float64, RoundUp) do
-                1.0 / σ22_lower
-            end
-
-            max_res_T22 = max(max_res_T22, r22)
-            max_resolvent = max(max_resolvent, res_z)
+        else
+            max_resolvent = max_res_T22
         end
     end
 
     # Step 6: Schur similarity bridge (rigorous via compute_schur_and_error bounds)
+    # Maps from Schur factor T to original matrix A_K: ||(zI-A)⁻¹|| ≤ ||Q|| · ||(zI-T)⁻¹|| · ||Q⁻¹||
     resolvent_Mr = setrounding(Float64, RoundUp) do
         norm_Z_f64 * max_resolvent * norm_Z_inv_f64
     end
