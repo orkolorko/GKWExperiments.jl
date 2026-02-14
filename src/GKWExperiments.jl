@@ -48,6 +48,7 @@ using .Constants
 export compute_C2, compute_Δ, is_certified
 export h2_whiten, power_opnorms, lr_power_bounds_from_Ak
 export poly_bridge_constant_powers_from_coeffs, poly_perturbation_bound_powers_from_coeffs
+export _arb_to_float64_upper, _arb_to_bigfloat_upper
 
 # Transfer operator matrix construction
 include("GKWDiscretization.jl")

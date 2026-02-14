@@ -91,9 +91,9 @@ println()
 @info "Computing truncation error bounds..."
 
 C2 = compute_C2(N_splitting)
-C2_float = Float64(real(C2))
+C2_float = _arb_to_float64_upper(C2)
 eps_K = compute_Δ(K; N=N_splitting)
-eps_K_float = Float64(real(eps_K))
+eps_K_float = _arb_to_float64_upper(eps_K)
 
 println("Truncation Error Analysis:")
 println("  C₂ = $C2_float")

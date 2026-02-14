@@ -21,6 +21,7 @@
 using GKWExperiments
 using ArbNumerics
 using BallArithmetic
+using GenericSchur
 using LinearAlgebra
 using Printf
 using Dates
@@ -244,8 +245,10 @@ println()
 @info "Building GKW matrix at K=$K_HIGH (this may take a while)..."
 t0 = time()
 M_arb_high = gkw_matrix_direct(s; K=K_HIGH)
-A_high = arb_to_ball_matrix(M_arb_high)
-@info "  Matrix built in $(round(time()-t0, digits=1))s"
+
+# Convert directly to BigFloat BallMatrix (no Float64 truncation)
+A_high_bf = BallMatrix(BigFloat, M_arb_high)
+@info "  Matrix built in $(round(time()-t0, digits=1))s, center eltype: $(eltype(BallArithmetic.mid(A_high_bf)))"
 
 # Storage for two-stage results
 two_stage_results = TwoStageCertificationResult[]
@@ -257,11 +260,11 @@ println("-"^80)
 for s1 in stage1_results
     i = s1.index
 
-    # Stage 2: NK at K_high
-    @info "Eigenvalue $i: NK certification at K=$K_HIGH..."
+    # Stage 2: NK at K_high (BigFloat)
+    @info "Eigenvalue $i: NK certification at K=$K_HIGH (BigFloat)..."
     t1 = time()
     nk_result = try
-        certify_eigenpair_nk(A_high; K=K_HIGH, target_idx=i, N_C2=N_SPLITTING)
+        certify_eigenpair_nk(A_high_bf; K=K_HIGH, target_idx=i, N_C2=N_SPLITTING)
     catch e
         @warn "  NK failed with error: $(typeof(e)): $(e)"
         nothing
@@ -269,14 +272,14 @@ for s1 in stage1_results
     dt_nk = time() - t1
 
     nk_certified = nk_result !== nothing && nk_result.is_certified
-    nk_radius = nk_certified ? nk_result.enclosure_radius : Inf
-    nk_eig_radius = nk_certified ? nk_result.eigenvalue_radius : Inf
-    nk_vec_radius = nk_certified ? nk_result.eigenvector_radius : Inf
+    nk_radius = nk_certified ? Float64(nk_result.enclosure_radius) : Inf
+    nk_eig_radius = nk_certified ? Float64(nk_result.eigenvalue_radius) : Inf
+    nk_vec_radius = nk_certified ? Float64(nk_result.eigenvector_radius) : Inf
 
     if nk_certified
         @info "  NK CERTIFIED: r_NK = $(@sprintf("%.4e", nk_radius)) [$(round(dt_nk, digits=1))s]"
     else
-        reason = nk_result !== nothing ? "q₀ = $(nk_result.q0_bound)" : "error"
+        reason = nk_result !== nothing ? "q₀ = $(Float64(nk_result.q0_bound))" : "error"
         @warn "  NK FAILED ($reason) [$(round(dt_nk, digits=1))s]"
     end
 

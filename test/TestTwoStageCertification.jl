@@ -143,9 +143,9 @@ using BallArithmetic
         N_splitting = 100
 
         # Compute truncation errors
-        eps_K_low = Float64(real(compute_Δ(K_low; N=N_splitting)))
-        eps_K_high = Float64(real(compute_Δ(K_high; N=N_splitting)))
-        C2_val = Float64(real(compute_C2(N_splitting)))
+        eps_K_low = _arb_to_float64_upper(compute_Δ(K_low; N=N_splitting))
+        eps_K_high = _arb_to_float64_upper(compute_Δ(K_high; N=N_splitting))
+        C2_val = _arb_to_float64_upper(compute_C2(N_splitting))
 
         @test eps_K_high < eps_K_low  # Higher K gives smaller error
 

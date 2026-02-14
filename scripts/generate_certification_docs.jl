@@ -75,9 +75,9 @@ mkpath("docs/src")
 # Step 1: Compute truncation error bounds
 println("Computing truncation error bounds...")
 C2 = compute_C2(N_SPLITTING)
-C2_float = Float64(real(C2))
+C2_float = _arb_to_float64_upper(C2)
 eps_K = compute_Δ(K; N=N_SPLITTING)
-eps_K_float = Float64(real(eps_K))
+eps_K_float = _arb_to_float64_upper(eps_K)
 
 println("  C₂ = $C2_float")
 println("  ε_K = $eps_K_float")

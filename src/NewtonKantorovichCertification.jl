@@ -26,8 +26,8 @@ using ArbNumerics
 using BallArithmetic
 
 import ..Constants: compute_C2, compute_Δ, h2_whiten
+import ..Constants: _arb_to_float64_upper, _arb_to_bigfloat_upper
 import ..GKWDiscretization: gkw_matrix_direct
-import ..EigenspaceCertification: arb_to_ball_matrix
 
 export NKCertificationResult, certify_eigenpair_nk
 export assemble_eigenpair_jacobian, compute_nk_radius
@@ -62,23 +62,23 @@ unique true eigenpair (λ*, v*) of the infinite-dimensional operator L_r.
 - `C2_bound`: Operator norm constant C₂
 - `v_norm`: ‖v_A‖₂ in whitened coordinates
 """
-struct NKCertificationResult
-    eigenvalue_center::ComplexF64
-    eigenvector_center::Vector{ComplexF64}
-    enclosure_radius::Float64
-    eigenvalue_radius::Float64
-    eigenvector_radius::Float64
-    qk_bound::Float64
-    C_bound::Float64
-    q0_bound::Float64
-    y_bound::Float64
-    truncation_error::Float64
-    discriminant::Float64
+struct NKCertificationResult{CT<:Number, RT<:AbstractFloat}
+    eigenvalue_center::CT
+    eigenvector_center::Vector{CT}
+    enclosure_radius::RT
+    eigenvalue_radius::RT
+    eigenvector_radius::RT
+    qk_bound::RT
+    C_bound::RT
+    q0_bound::RT
+    y_bound::RT
+    truncation_error::RT
+    discriminant::RT
     is_certified::Bool
     discretization_size::Int
-    hardy_space_radius::Float64
-    C2_bound::Float64
-    v_norm::Float64
+    hardy_space_radius::RT
+    C2_bound::RT
+    v_norm::RT
 end
 
 function Base.show(io::IO, result::NKCertificationResult)
@@ -99,36 +99,6 @@ function Base.show(io::IO, result::NKCertificationResult)
     println(io, "Hardy space: H²(D_{$(result.hardy_space_radius)})")
     println(io, "Matrix size: $(result.discretization_size)")
     println(io, "C₂ bound: $(result.C2_bound)")
-end
-
-# ============================================================================
-# Rigorous Arb → Float64 upper bound
-# ============================================================================
-
-"""
-    _arb_to_float64_upper(x::ArbReal)
-
-Convert an ArbReal ball to a rigorous Float64 upper bound.
-
-Returns `midpoint(x) + radius(x)` converted to Float64 with upward rounding,
-plus the Float64 conversion error on the midpoint.
-"""
-function _arb_to_float64_upper(x)
-    x_real = real(x)
-    mid_arb = ArbNumerics.midpoint(x_real)
-    rad_arb = ArbNumerics.radius(x_real)
-
-    mid_f64 = Float64(mid_arb)
-    rad_f64 = Float64(rad_arb)
-
-    # Conversion error: |mid_arb - mid_f64|
-    mid_big = parse(BigFloat, string(mid_arb))
-    conv_err = Float64(abs(mid_big - BigFloat(mid_f64)))
-
-    # Rigorous upper bound
-    setrounding(Float64, RoundUp) do
-        mid_f64 + rad_f64 + conv_err
-    end
 end
 
 # ============================================================================
@@ -169,7 +139,7 @@ end
 # ============================================================================
 
 """
-    whiten_eigenpair(A_mid::Matrix, r::Real, target_idx::Int)
+    whiten_eigenpair(A_mid::AbstractMatrix, r::Real, target_idx::Int)
         → (λ_A, v_A, u_A, A_tilde)
 
 Compute a numerical eigenpair of the whitened matrix and the biorthogonal
@@ -181,34 +151,37 @@ left eigenvector.
 3. Compute left eigenvector u_A of Ã* for conj(λ_A)
 4. Normalize so that u_A* · v_A = 1
 
+Types are inferred from the input matrix: Float64 inputs give ComplexF64 outputs,
+BigFloat inputs give Complex{BigFloat} outputs (requires `using GenericSchur`).
+
 # Arguments
 - `A_mid`: Center of the Galerkin matrix in monomial basis
 - `r`: Hardy space radius
 - `target_idx`: Which eigenvalue to target (1 = dominant)
 
 # Returns
-- `λ_A::ComplexF64`: Target eigenvalue
-- `v_A::Vector{ComplexF64}`: Right eigenvector (biorthogonally normalized)
-- `u_A::Vector{ComplexF64}`: Left eigenvector with u_A* v_A = 1
-- `A_tilde::Matrix{ComplexF64}`: Whitened matrix
+- `λ_A`: Target eigenvalue
+- `v_A`: Right eigenvector (biorthogonally normalized)
+- `u_A`: Left eigenvector with u_A* v_A = 1
+- `A_tilde`: Whitened matrix
 """
 function whiten_eigenpair(A_mid::AbstractMatrix, r::Real, target_idx::Int)
-    # Step 1: Whiten
-    A_tilde = Matrix{ComplexF64}(h2_whiten(A_mid, r))
+    # Step 1: Whiten (preserves element type)
+    A_tilde = Matrix(complex(h2_whiten(A_mid, r)))
 
     # Step 2: Right eigenpair
     F = eigen(A_tilde)
     sorted_idx = sortperm(abs.(F.values), rev=true)
     idx = sorted_idx[target_idx]
-    λ_A = ComplexF64(F.values[idx])
-    v_A = Vector{ComplexF64}(F.vectors[:, idx])
+    λ_A = F.values[idx]
+    v_A = Vector(F.vectors[:, idx])
 
     # Step 3: Left eigenvector (eigenvector of A* for conj(λ_A))
     F_adj = eigen(Matrix(A_tilde'))
     # Match eigenvalue closest to conj(λ_A)
     dists = abs.(F_adj.values .- conj(λ_A))
     left_idx = argmin(dists)
-    u_A = Vector{ComplexF64}(F_adj.vectors[:, left_idx])
+    u_A = Vector(F_adj.vectors[:, left_idx])
 
     # Step 4: Normalize so u_A* v_A = 1
     ip = dot(u_A, v_A)
@@ -254,9 +227,13 @@ function assemble_eigenpair_jacobian(A_tilde_ball::BallMatrix, λ_A::Number,
     A_center = BallArithmetic.mid(A_tilde_ball)
     A_radius = BallArithmetic.rad(A_tilde_ball)
 
+    # Infer types from BallMatrix
+    CT = eltype(A_center)   # ComplexF64 or Complex{BigFloat}
+    RT = real(CT)            # Float64 or BigFloat
+
     # Build (N+1)×(N+1) Jacobian
-    J_center = zeros(ComplexF64, N + 1, N + 1)
-    J_radius = zeros(Float64, N + 1, N + 1)
+    J_center = zeros(CT, N + 1, N + 1)
+    J_radius = zeros(RT, N + 1, N + 1)
 
     # First column: [-v_A; 0]  (exact: defines the base point)
     for i in 1:N
@@ -265,7 +242,7 @@ function assemble_eigenpair_jacobian(A_tilde_ball::BallMatrix, λ_A::Number,
 
     # Top-right N×N block: (Ã - λ_A I)
     # Uncertainty comes only from Ã; λ_A is the exact floating-point base point.
-    λ_c = ComplexF64(λ_A)
+    λ_c = CT(λ_A)
     for i in 1:N, j in 1:N
         if i == j
             J_center[i, j + 1] = A_center[i, j] - λ_c
@@ -288,8 +265,8 @@ end
 # ============================================================================
 
 """
-    compute_nk_radius(Jk::BallMatrix, C_float::Matrix{ComplexF64},
-                       v_A::AbstractVector, epsilon::Float64)
+    compute_nk_radius(Jk::BallMatrix, C_float::AbstractMatrix,
+                       v_A::AbstractVector, epsilon::Real)
         → NamedTuple
 
 Compute the Newton–Kantorovich enclosure radius using the Krawczyk fixed-point
@@ -301,6 +278,8 @@ The final radius uses the rationalized formula
 which avoids cancellation and simplifies directed rounding (numerator up,
 denominator down → rigorous upper bound).
 
+The real type `T` (Float64 or BigFloat) is inferred from the BallMatrix.
+
 # Arguments
 - `Jk`: (N+1)×(N+1) eigenpair Jacobian as BallMatrix
 - `C_float`: Approximate inverse of mid(Jk) (preconditioner)
@@ -310,69 +289,76 @@ denominator down → rigorous upper bound).
 # Returns
 NamedTuple with fields: `r_NK`, `qk`, `C_ub`, `q0`, `y`, `discriminant`, `is_certified`
 """
-function compute_nk_radius(Jk::BallMatrix, C_float::Matrix{ComplexF64},
-                            v_A::AbstractVector, epsilon::Float64)
+function compute_nk_radius(Jk::BallMatrix, C_float::AbstractMatrix,
+                            v_A::AbstractVector, epsilon::Real)
     Np1 = size(Jk, 1)
+    T = real(eltype(BallArithmetic.mid(Jk)))   # Float64 or BigFloat
+    CT = complex(T)                             # ComplexF64 or Complex{BigFloat}
 
     # Step 1: Wrap preconditioner as BallMatrix (exact, zero radius)
-    C_ball = BallMatrix(C_float, zeros(Float64, Np1, Np1))
+    C_ball = BallMatrix(CT.(C_float), zeros(T, Np1, Np1))
 
     # Step 2: R_k = I - C·J_k, then q_k = ‖R_k‖₂
     # BallArithmetic subtraction includes ε·|center| term for rounding rigor.
-    I_ball = BallMatrix(Matrix{ComplexF64}(I, Np1, Np1), zeros(Float64, Np1, Np1))
+    I_ball = BallMatrix(Matrix{CT}(I, Np1, Np1), zeros(T, Np1, Np1))
     CJ = C_ball * Jk
     Rk = I_ball - CJ
 
     # Certified upper bound on ‖R_k‖₂ via Rump-style SVD enclosure
     qk_ball = svd_bound_L2_opnorm(Rk)
-    qk = Float64(BallArithmetic.mid(qk_ball)) + Float64(BallArithmetic.rad(qk_ball))
+    qk = T(BallArithmetic.mid(qk_ball)) + T(BallArithmetic.rad(qk_ball))
 
     # Step 3: Certified upper bound on ‖C‖₂
     C_ub_ball = svd_bound_L2_opnorm(C_ball)
-    C_ub = Float64(BallArithmetic.mid(C_ub_ball)) + Float64(BallArithmetic.rad(C_ub_ball))
+    C_ub = T(BallArithmetic.mid(C_ub_ball)) + T(BallArithmetic.rad(C_ub_ball))
 
     # Compute ‖v_A‖₂
-    v_norm = norm(v_A)
+    v_norm = T(norm(v_A))
+
+    # Convert epsilon to T with directed rounding (rigorous when BigFloat→Float64)
+    epsilon_T = setrounding(T, RoundUp) do
+        T(epsilon)
+    end
 
     # Step 4: q₀ = q_k + ‖C‖·ε  (rigorous upper bound, NK.md §5.3)
     # All arithmetic under RoundUp to ensure the result is an upper bound.
-    q0 = setrounding(Float64, RoundUp) do
-        qk + C_ub * epsilon
+    q0 = setrounding(T, RoundUp) do
+        qk + C_ub * epsilon_T
     end
 
     # Step 5: y = ‖C‖·ε·‖v_A‖₂  (rigorous upper bound, NK.md §5.4)
-    y = setrounding(Float64, RoundUp) do
-        C_ub * epsilon * v_norm
+    y = setrounding(T, RoundUp) do
+        C_ub * epsilon_T * v_norm
     end
 
     # Step 6: Check q₀ < 1  (NK.md §6.1, contraction condition)
-    if q0 >= 1.0
-        return (r_NK=Inf, qk=qk, C_ub=C_ub, q0=q0, y=y,
-                discriminant=-Inf, is_certified=false, v_norm=v_norm)
+    if q0 >= one(T)
+        return (r_NK=T(Inf), qk=qk, C_ub=C_ub, q0=q0, y=y,
+                epsilon=epsilon_T, discriminant=T(-Inf), is_certified=false, v_norm=v_norm)
     end
 
     # Discriminant check: (1-q₀)² ≥ 4·‖C‖·y  (NK.md §6.1)
     # Compute rigorous LOWER bound on (1-q₀)².
     # Since q₀ is an upper bound, (1-q₀) is a lower bound on the true margin.
     # Squaring a positive lower bound with RoundDown gives a lower bound.
-    omq_sq_lower = setrounding(Float64, RoundDown) do
-        omq = 1.0 - q0
+    omq_sq_lower = setrounding(T, RoundDown) do
+        omq = one(T) - q0
         omq * omq
     end
 
     # Compute rigorous UPPER bound on 4·‖C‖·y
-    four_Cy_upper = setrounding(Float64, RoundUp) do
-        4.0 * C_ub * y
+    four_Cy_upper = setrounding(T, RoundUp) do
+        T(4) * C_ub * y
     end
 
     # Rigorous lower bound on discriminant
-    disc = setrounding(Float64, RoundDown) do
+    disc = setrounding(T, RoundDown) do
         omq_sq_lower - four_Cy_upper
     end
 
-    if disc < 0.0
-        return (r_NK=Inf, qk=qk, C_ub=C_ub, q0=q0, y=y,
-                discriminant=disc, is_certified=false, v_norm=v_norm)
+    if disc < zero(T)
+        return (r_NK=T(Inf), qk=qk, C_ub=C_ub, q0=q0, y=y,
+                epsilon=epsilon_T, discriminant=disc, is_certified=false, v_norm=v_norm)
     end
 
     # Step 7: NK enclosure radius  (NK.md §6.2)
@@ -384,34 +370,34 @@ function compute_nk_radius(Jk::BallMatrix, C_float::Matrix{ComplexF64},
     #
     # For a rigorous UPPER bound: numerator rounded UP, denominator rounded DOWN.
 
-    numer = setrounding(Float64, RoundUp) do
-        2.0 * y
+    numer = setrounding(T, RoundUp) do
+        T(2) * y
     end
 
     # denominator = (1-q₀) + √disc
     # (1-q₀) is already a lower bound (since q₀ is upper); round down.
     # √disc: disc is a lower bound, √ is monotone, round down → lower bound.
-    denom = setrounding(Float64, RoundDown) do
-        omq = 1.0 - q0
+    denom = setrounding(T, RoundDown) do
+        omq = one(T) - q0
         omq + sqrt(disc)
     end
 
-    if denom <= 0.0
-        return (r_NK=Inf, qk=qk, C_ub=C_ub, q0=q0, y=y,
-                discriminant=disc, is_certified=false, v_norm=v_norm)
+    if denom <= zero(T)
+        return (r_NK=T(Inf), qk=qk, C_ub=C_ub, q0=q0, y=y,
+                epsilon=epsilon_T, discriminant=disc, is_certified=false, v_norm=v_norm)
     end
 
-    r_NK = setrounding(Float64, RoundUp) do
+    r_NK = setrounding(T, RoundUp) do
         numer / denom
     end
 
-    if r_NK <= 0.0 || !isfinite(r_NK)
-        return (r_NK=Inf, qk=qk, C_ub=C_ub, q0=q0, y=y,
-                discriminant=disc, is_certified=false, v_norm=v_norm)
+    if r_NK <= zero(T) || !isfinite(r_NK)
+        return (r_NK=T(Inf), qk=qk, C_ub=C_ub, q0=q0, y=y,
+                epsilon=epsilon_T, discriminant=disc, is_certified=false, v_norm=v_norm)
     end
 
     return (r_NK=r_NK, qk=qk, C_ub=C_ub, q0=q0, y=y,
-            discriminant=disc, is_certified=true, v_norm=v_norm)
+            epsilon=epsilon_T, discriminant=disc, is_certified=true, v_norm=v_norm)
 end
 
 # ============================================================================
@@ -466,8 +452,8 @@ function certify_eigenpair_nk(s::ArbComplex; K::Int=32, r::Real=1.0,
     # Step 1: Build Galerkin matrix
     M_arb = gkw_matrix_direct(s; K=K)
 
-    # Step 2: Convert to BallMatrix
-    A_ball = arb_to_ball_matrix(M_arb)
+    # Step 2: Convert to BigFloat BallMatrix (no Float64 truncation)
+    A_ball = BallMatrix(BigFloat, M_arb)
 
     return certify_eigenpair_nk(A_ball; K=K, r=r, target_idx=target_idx, N_C2=N_C2)
 end
@@ -478,18 +464,24 @@ end
         → NKCertificationResult
 
 Overload accepting a pre-computed BallMatrix (avoids rebuilding the matrix).
+
+The real type (Float64 or BigFloat) is inferred from the BallMatrix center.
+For BigFloat inputs, `using GenericSchur` must be active for `eigen` to work.
 """
 function certify_eigenpair_nk(A_ball::BallMatrix; K::Int, r::Real=1.0,
                                target_idx::Int=1, N_C2::Int=1000)
     N = size(A_ball, 1)
     @assert N == K + 1 "Matrix size $(N) does not match K+1=$(K+1)"
 
-    # Step 3: Whiten and compute eigenpair on Float64 center
     A_mid = BallArithmetic.mid(A_ball)
-    λ_A, v_A, u_A, _ = whiten_eigenpair(A_mid, r, target_idx)
+    T = real(eltype(A_mid))   # Float64 or BigFloat
+    CT = complex(T)
+
+    # Step 3: Whiten and compute eigenpair
+    λ_A, v_A, u_A, _ = whiten_eigenpair(A_mid, T(r), target_idx)
 
     # Step 4: Whiten BallMatrix
-    A_tilde_ball = h2_whiten_ball(A_ball, r)
+    A_tilde_ball = h2_whiten_ball(A_ball, T(r))
 
     # Step 5: Assemble Jacobian
     Jk = assemble_eigenpair_jacobian(A_tilde_ball, λ_A, v_A, u_A)
@@ -498,17 +490,18 @@ function certify_eigenpair_nk(A_ball::BallMatrix; K::Int, r::Real=1.0,
     Jk_mid = BallArithmetic.mid(Jk)
     C_float = inv(Jk_mid)
 
-    # Step 7: Compute truncation error as rigorous upper bound
-    # _arb_to_float64_upper accounts for Arb ball radius + Float64 conversion error.
-    C2 = _arb_to_float64_upper(compute_C2(N_C2))
-    ε_K = _arb_to_float64_upper(compute_Δ(K; N=N_C2))
+    # Step 7: Compute truncation error as rigorous BigFloat upper bound.
+    # Always compute in BigFloat (no Arb→Float64 truncation).
+    # compute_nk_radius will convert to T internally with directed rounding.
+    C2_bf = _arb_to_bigfloat_upper(compute_C2(N_C2))
+    ε_K_bf = _arb_to_bigfloat_upper(compute_Δ(K; N=N_C2))
 
     # Step 8: Compute NK radius
-    nk = compute_nk_radius(Jk, C_float, v_A, ε_K)
+    nk = compute_nk_radius(Jk, C_float, v_A, ε_K_bf)
 
     return NKCertificationResult(
-        λ_A,
-        v_A,
+        CT(λ_A),
+        Vector{CT}(v_A),
         nk.r_NK,
         nk.r_NK,       # eigenvalue_radius ≤ r_NK (product norm)
         nk.r_NK,       # eigenvector_radius ≤ r_NK
@@ -516,13 +509,13 @@ function certify_eigenpair_nk(A_ball::BallMatrix; K::Int, r::Real=1.0,
         nk.C_ub,
         nk.q0,
         nk.y,
-        ε_K,
+        nk.epsilon,
         nk.discriminant,
         nk.is_certified,
         K + 1,
-        Float64(r),
-        C2,
-        nk.v_norm
+        T(r),
+        T(C2_bf),
+        T(nk.v_norm)
     )
 end
 

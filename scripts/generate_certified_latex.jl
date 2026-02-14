@@ -310,9 +310,9 @@ if has_checkpoint(cp, "C2_float") && has_checkpoint(cp, "eps_K_float")
 else
     @info "Computing truncation error bounds..."
     C2 = compute_C2(N_SPLITTING)
-    C2_float = Float64(real(C2))
+    C2_float = _arb_to_float64_upper(C2)
     eps_K = compute_Δ(K; N = N_SPLITTING)
-    eps_K_float = Float64(real(eps_K))
+    eps_K_float = _arb_to_float64_upper(eps_K)
     cp["C2_float"] = C2_float
     cp["eps_K_float"] = eps_K_float
     save_checkpoint(cp)

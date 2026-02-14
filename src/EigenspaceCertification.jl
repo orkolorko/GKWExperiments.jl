@@ -50,52 +50,17 @@ num_clusters(result::GKWEigenCertificationResult) = length(result.block_schur.cl
 """
     arb_to_ball_matrix(M_arb::Matrix{ArbComplex{P}}) where {P}
 
-Convert an ArbNumerics complex matrix to a BallMatrix{ComplexF64, Float64}.
+Convert an ArbNumerics complex matrix to a Float64 `BallMatrix`.
 
-The radius includes both the ArbNumerics uncertainty and any conversion error
-from high-precision to Float64.
+**Warning:** This truncates the Arb midpoint to Float64, losing ~450 bits of
+precision. The conversion error is tracked rigorously in the radius, but the
+center is only Float64-accurate. For full-precision conversion, use
+`BallMatrix(BigFloat, M_arb)` instead (provided by BallArithmetic's
+ArbNumericsExt).
 
-# Arguments
-- `M_arb`: Matrix of ArbComplex numbers
-
-# Returns
-- `BallMatrix`: Ball matrix with centers and radii
+Delegates to `BallMatrix(M_arb)` from BallArithmetic's ArbNumericsExt.
 """
-function arb_to_ball_matrix(M_arb::Matrix{ArbComplex{P}}) where {P}
-    n, m = size(M_arb)
-    M_center = Matrix{ComplexF64}(undef, n, m)
-    M_radius = Matrix{Float64}(undef, n, m)
-
-    for i in 1:n, j in 1:m
-        # Get high-precision midpoint and radius from ArbNumerics
-        mid_real_arb = ArbNumerics.midpoint(real(M_arb[i, j]))
-        mid_imag_arb = ArbNumerics.midpoint(imag(M_arb[i, j]))
-        rad_real_arb = ArbNumerics.radius(real(M_arb[i, j]))
-        rad_imag_arb = ArbNumerics.radius(imag(M_arb[i, j]))
-
-        # Convert midpoint to Float64
-        center_real = Float64(mid_real_arb)
-        center_imag = Float64(mid_imag_arb)
-        M_center[i, j] = Complex{Float64}(center_real, center_imag)
-
-        # Convert midpoint to BigFloat for error computation (avoiding ArbReal-BigFloat promotion)
-        mid_real_big = parse(BigFloat, string(mid_real_arb))
-        mid_imag_big = parse(BigFloat, string(mid_imag_arb))
-
-        # Compute conversion error (difference between BigFloat and Float64)
-        conv_err_real = Float64(abs(mid_real_big - BigFloat(center_real)))
-        conv_err_imag = Float64(abs(mid_imag_big - BigFloat(center_imag)))
-
-        # Total radius: ArbNumerics radius + conversion error
-        total_rad_real = Float64(rad_real_arb) + conv_err_real
-        total_rad_imag = Float64(rad_imag_arb) + conv_err_imag
-
-        # Combined radius for complex ball
-        M_radius[i, j] = sqrt(total_rad_real^2 + total_rad_imag^2)
-    end
-
-    return BallMatrix(M_center, M_radius)
-end
+arb_to_ball_matrix(M_arb::Matrix{<:ArbComplex}) = BallMatrix(M_arb)
 
 
 """

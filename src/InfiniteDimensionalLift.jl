@@ -26,7 +26,7 @@ using ArbNumerics
 using BallArithmetic
 
 import ..Constants: compute_C2, compute_Δ, h2_whiten
-import ..Constants: poly_bridge_constant_powers_from_coeffs
+import ..Constants: poly_bridge_constant_powers_from_coeffs, _arb_to_float64_upper
 import ..EigenspaceCertification: GKWEigenCertificationResult, arb_to_ball_matrix
 import ..EigenspaceCertification: float64_ball_to_bigfloat_ball, bigfloat_ball_to_float64_ball
 import ..Polynomials: deflation_polynomial, polyval, polyval_derivative
@@ -204,7 +204,7 @@ function verify_spectral_gap(certification_result, ::Number,
 
     # Compute truncation error
     K = size(certification_result.schur.T, 1) - 1
-    ε_K = Float64(real(compute_Δ(K; N=N)))
+    ε_K = _arb_to_float64_upper(compute_Δ(K; N=N))
 
     # Check small-gain condition
     is_valid, α = resolvent_bridge_condition(resolvent_Ak, ε_K)
@@ -354,8 +354,8 @@ function certify_eigenvalue_lift(finite_dim_result::GKWEigenCertificationResult,
     K = finite_dim_result.discretization_size - 1
 
     # Compute C₂ and truncation error
-    C2 = Float64(real(compute_C2(N)))
-    ε_K = Float64(real(compute_Δ(K; N=N)))
+    C2 = _arb_to_float64_upper(compute_C2(N))
+    ε_K = _arb_to_float64_upper(compute_Δ(K; N=N))
 
     # Get eigenvalue from VBD result
     vbd = finite_dim_result.block_schur.vbd_result
@@ -450,8 +450,8 @@ function certify_eigenvalue_simple(A::BallMatrix, λ_approx::ComplexF64, circle_
     cert_data = run_certification(A, circle)
 
     # Compute bounds
-    C2 = Float64(real(compute_C2(N)))
-    ε_K = Float64(real(compute_Δ(K; N=N)))
+    C2 = _arb_to_float64_upper(compute_C2(N))
+    ε_K = _arb_to_float64_upper(compute_Δ(K; N=N))
 
     resolvent_Ak = cert_data.resolvent_original
     is_valid, α = resolvent_bridge_condition(resolvent_Ak, ε_K)
@@ -770,7 +770,7 @@ function certify_eigenvalue_deflation(A::BallMatrix, lambda_tgt::Number,
     resolvent_Mr = cert_data.resolvent_original
 
     # Step 3: Compute polynomial perturbation bound
-    ε_K = Float64(real(compute_Δ(K; N=N)))
+    ε_K = _arb_to_float64_upper(compute_Δ(K; N=N))
 
     if use_tight_bridge
         Ak_center = BallArithmetic.mid(A)
@@ -1139,7 +1139,7 @@ function certify_eigenvalue_deflation_bigfloat(A_f64::BallMatrix, lambda_tgt::Nu
     end
 
     # Step 8: Polynomial perturbation bound ε_{p,r} = ε_K · C_r^{pow}
-    ε_K = Float64(real(compute_Δ(K; N=N)))
+    ε_K = _arb_to_float64_upper(compute_Δ(K; N=N))
     poly_coeffs_f64 = Float64.(bf_coeffs)
 
     if use_tight_bridge
@@ -1440,7 +1440,7 @@ function certify_eigenvalue_ordschur_direct(A_f64::BallMatrix, lambda_tgt::Numbe
     end
 
     # Step 7: Small-gain check
-    ε_K = Float64(real(compute_Δ(K; N=N)))
+    ε_K = _arb_to_float64_upper(compute_Δ(K; N=N))
     α = setrounding(Float64, RoundUp) do
         ε_K * resolvent_Mr
     end
@@ -1677,7 +1677,7 @@ function certify_eigenvalue_schur_direct(A_f64::BallMatrix, schur_position::Int;
     end
 
     # Step 7: Small-gain check
-    ε_K = Float64(real(compute_Δ(K; N=N)))
+    ε_K = _arb_to_float64_upper(compute_Δ(K; N=N))
     α = setrounding(Float64, RoundUp) do
         ε_K * resolvent_Mr
     end

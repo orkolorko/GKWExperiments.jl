@@ -154,8 +154,8 @@ end
 # ## Step 1: Compute Constants
 
 @info "Computing certification constants..."
-C2 = Float64(real(compute_C2(N_splitting)))
-eps_K = Float64(real(compute_Δ(K; N=N_splitting)))
+C2 = _arb_to_float64_upper(compute_C2(N_splitting))
+eps_K = _arb_to_float64_upper(compute_Δ(K; N=N_splitting))
 
 @info "C₂ = $C2"
 @info "ε_K = $eps_K"

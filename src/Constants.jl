@@ -16,6 +16,7 @@ import ..ArbZeta: hurwitz_zeta
 export compute_C2, compute_Δ, is_certified
 export h2_whiten, power_opnorms, lr_power_bounds_from_Ak
 export poly_bridge_constant_powers_from_coeffs, poly_perturbation_bound_powers_from_coeffs
+export _arb_to_float64_upper, _arb_to_bigfloat_upper
 
 # ============================================================================
 # GKW Operator Norm Bounds (Theorem 3.1 in reference)
@@ -214,6 +215,55 @@ Returns `(bound, Cr, α, β, s)` where `bound = |εr| * Cr`.
 function poly_perturbation_bound_powers_from_coeffs(c, Ak; r::Real, εr::Real)
     Cr, α, β, s = poly_bridge_constant_powers_from_coeffs(c, Ak; r = r, εr = εr)
     return (abs(εr) * Cr, Cr, α, β, s)
+end
+
+# ============================================================================
+# Rigorous Arb → Float64 / BigFloat upper bounds
+# ============================================================================
+
+"""
+    _arb_to_float64_upper(x)
+
+Convert an ArbReal ball to a rigorous Float64 upper bound.
+
+Returns `midpoint(x) + radius(x) + conversion_error`, converted to Float64
+with upward rounding. The conversion error accounts for the precision lost
+when truncating the Arb midpoint to Float64.
+"""
+function _arb_to_float64_upper(x)
+    x_real = real(x)
+    mid_arb = ArbNumerics.midpoint(x_real)
+    rad_arb = ArbNumerics.radius(x_real)
+
+    mid_f64 = Float64(mid_arb)
+    rad_f64 = Float64(rad_arb)
+
+    # Conversion error: |mid_arb - mid_f64|
+    mid_big = parse(BigFloat, string(mid_arb))
+    conv_err = Float64(abs(mid_big - BigFloat(mid_f64)))
+
+    # Rigorous upper bound
+    setrounding(Float64, RoundUp) do
+        mid_f64 + rad_f64 + conv_err
+    end
+end
+
+"""
+    _arb_to_bigfloat_upper(x)
+
+Convert an ArbReal ball to a rigorous BigFloat upper bound.
+
+Returns `midpoint(x) + radius(x)` converted to BigFloat with upward rounding.
+At matching precision (BigFloat ≥ Arb), the midpoint conversion is exact and
+no conversion error needs to be tracked.
+"""
+function _arb_to_bigfloat_upper(x)
+    x_real = real(x)
+    mid_bf = BigFloat(ArbNumerics.midpoint(x_real))
+    rad_bf = BigFloat(ArbNumerics.radius(x_real))
+    setrounding(BigFloat, RoundUp) do
+        mid_bf + rad_bf
+    end
 end
 
 end # module
