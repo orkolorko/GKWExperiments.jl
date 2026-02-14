@@ -938,6 +938,7 @@ end
                                            backmap_order::Int=2,
                                            use_tight_bridge::Bool=true,
                                            use_ordschur::Bool=true,
+                                           ordschur_indices=nothing,
                                            schur_data_bf=nothing)
 
 Certify an eigenvalue via polynomial deflation using BigFloat Schur decomposition.
@@ -977,6 +978,10 @@ for fast SVD certification.
   ill-conditioning when the full `p(T)` has eigenvalues spanning many orders of magnitude.
   The block triangular bound (Weyl's inequality) is:
   `σ_min(zI-p(T)) ≥ min(σ_min(zI-p(T₁₁)), σ_min(zI-p(T₂₂))) - ‖B_off‖`.
+- `ordschur_indices`: (default `nothing` → same as `certified_indices`) indices of
+  eigenvalues to move to the top-left T₁₁ block via ordschur. To avoid ill-conditioning,
+  pass ALL eigenvalues with `|λ| > |λ_tgt|` so that T₂₂ only contains small eigenvalues.
+  The deflation polynomial zeros (from `certified_indices`) must be a subset.
 - `schur_data_bf`: pre-computed BigFloat Schur data (5-tuple from `compute_schur_and_error`);
   if `nothing`, computed from `A_f64` promoted to BigFloat
 
@@ -992,6 +997,7 @@ function certify_eigenvalue_deflation_bigfloat(A_f64::BallMatrix, lambda_tgt::Nu
                                                 backmap_order::Int=2,
                                                 use_tight_bridge::Bool=true,
                                                 use_ordschur::Bool=true,
+                                                ordschur_indices::Union{Nothing, AbstractVector{<:Integer}}=nothing,
                                                 schur_data_bf=nothing)
     t0 = time()
     λ_tgt = ComplexF64(lambda_tgt)
@@ -1019,11 +1025,16 @@ function certify_eigenvalue_deflation_bigfloat(A_f64::BallMatrix, lambda_tgt::Nu
         # After ordschur: T_ord = [T₁₁ T₁₂; 0 T₂₂] with σ(T₁₁) = certified eigs.
         # p(T_ord) = [p(T₁₁) B_off; 0 p(T₂₂)] with p(T₁₁) ≈ 0 (zeros match eigs).
         # Weyl bound: σ_min(zI-p(T)) ≥ min(σ_min(zI-p(T₁₁)), σ_min(zI-p(T₂₂))) - ‖B_off‖.
-        schur_cert_indices = sorted_idx[certified_indices]
+        # ordschur_indices controls which eigenvalues move to T₁₁.
+        # Default: same as certified_indices (deflation zeros only).
+        # For better conditioning: pass all eigenvalues with |λ| > |λ_tgt| so T₂₂
+        # only contains small eigenvalues, avoiding huge p(T₂₂) entries.
+        ords_indices = ordschur_indices === nothing ? certified_indices : ordschur_indices
+        schur_ords_indices = sorted_idx[ords_indices]
         # Q_ord not needed: Givens rotations are unitary, so ‖Q_ord‖ = ‖Q‖.
         # The Schur bridge uses original norm_Z, norm_Z_inv.
         T_ord, _, k_block = _bigfloat_ordschur_block(
-            S_bf.T, S_bf.Z, schur_cert_indices)
+            S_bf.T, S_bf.Z, schur_ords_indices)
 
         # Evaluate p(T_ord) in BigFloat via Horner on full reordered T
         bT_ord = BallMatrix(T_ord)

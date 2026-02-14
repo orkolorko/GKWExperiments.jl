@@ -2,14 +2,17 @@
 """
 Test BigFloat deflation certification at K=256 on ibis.
 
-Uses cached BallMatrix, computes BigFloat Schur once, then certifies
+Uses cached BallMatrix and memoized BigFloat Schur, then certifies
 eigenvalues via polynomial deflation with ordschur projection.
 
-Key insight: deflating ALL 20 previously certified eigenvalues creates a
-degree-20 polynomial with bridge constant ~10^85 (normalization factor
-1/∏(λ_tgt - λᵢ) is enormous when zeros span [10⁻⁹, 1]). Instead, we
-selectively deflate only the k nearest eigenvalues (k ≤ 5), keeping the
-polynomial degree low and the bridge constant manageable.
+Key design choices:
+1. **Selective deflation**: Only deflate the k nearest eigenvalues (k ≤ 5)
+   to keep polynomial degree and bridge constant manageable.
+2. **Full ordschur projection**: Move ALL certified eigenvalues (1-20) to T₁₁
+   so that T₂₂ contains only small eigenvalues. This prevents the polynomial
+   from mapping large eigenvalues (λ₁ = 1, etc.) to ~10^37 inside T₂₂.
+3. **Memoized Schur**: Cache the BigFloat Schur decomposition to avoid
+   recomputing it (150s) across runs.
 """
 
 using GKWExperiments, BallArithmetic, ArbNumerics, LinearAlgebra, Serialization, Dates
@@ -23,6 +26,7 @@ flush(stdout)
 # Load cached K=256 BallMatrix
 const K = 256
 const CACHE_PATH = joinpath(@__DIR__, "..", "data", "ball_matrix_K256.jls")
+const SCHUR_CACHE_PATH = joinpath(@__DIR__, "..", "data", "bigfloat_schur_K256.jls")
 
 println("\nLoading cached BallMatrix from $CACHE_PATH...")
 A_ball = Serialization.deserialize(CACHE_PATH)
@@ -40,15 +44,23 @@ println("  Eigenvalue 30: ", real(sorted_eigs[30]))
 println("  Eigenvalue 50: ", real(sorted_eigs[50]))
 flush(stdout)
 
-# Compute BigFloat Schur decomposition (one-time cost)
-println("\nComputing BigFloat Schur decomposition...")
-flush(stdout)
-t_schur = @elapsed begin
-    A_bf = float64_ball_to_bigfloat_ball(A_ball)
-    sd_bf = compute_schur_and_error(A_bf)
+# BigFloat Schur decomposition — memoized
+if isfile(SCHUR_CACHE_PATH)
+    println("\nLoading cached BigFloat Schur from $SCHUR_CACHE_PATH...")
+    flush(stdout)
+    sd_bf = Serialization.deserialize(SCHUR_CACHE_PATH)
+    println("  Loaded successfully")
+else
+    println("\nComputing BigFloat Schur decomposition (will cache for future runs)...")
+    flush(stdout)
+    t_schur = @elapsed begin
+        A_bf = float64_ball_to_bigfloat_ball(A_ball)
+        sd_bf = compute_schur_and_error(A_bf)
+    end
+    println("  Done in $(round(t_schur, digits=1))s — saving to $SCHUR_CACHE_PATH")
+    Serialization.serialize(SCHUR_CACHE_PATH, sd_bf)
 end
 S_bf = sd_bf[1]
-println("  Done in $(round(t_schur, digits=1))s")
 println("  norm_Z = ", Float64(sd_bf[4]))
 println("  norm_Z_inv = ", Float64(sd_bf[5]))
 flush(stdout)
@@ -64,36 +76,28 @@ for j in 1:5
 end
 flush(stdout)
 
-# === Selective deflation strategy ===
-# For each target eigenvalue, only deflate the k nearest certified eigenvalues.
-# This keeps the polynomial degree low and the bridge constant manageable.
-#
-# Why: A degree-d polynomial with normalization 1/∏(λ_tgt - λᵢ) has
-# bridge constant C_r ~ (1/gap)^d. For d=20 with zeros spanning [10⁻⁹, 1],
-# C_r ~ 10^85. For d=3 with nearby zeros (gap ~ 10⁻⁸), C_r ~ 10^24,
-# giving eps_p ~ 10⁻²⁰ << 1.
-
-const CERTIFIED_RANGE = 1:20
-const TEST_RANGE = 21:50
+# === Configuration ===
+const CERTIFIED_RANGE = 1:20       # already certified (BigFloat resolvent)
+const TEST_RANGE = 21:50           # targets for deflation certification
 const MAX_DEFLATION_NEIGHBORS = 5  # max nearby eigenvalues to deflate
+const ALL_CERTIFIED = collect(CERTIFIED_RANGE)  # for ordschur: move ALL to T₁₁
 
 """
 Select the k nearest certified eigenvalues to the target for deflation.
 Returns indices (in magnitude-sorted order) of eigenvalues to deflate.
 """
 function select_nearby_deflation(target_j, certified_set, sorted_eigs; k_max=MAX_DEFLATION_NEIGHBORS)
-    λ_tgt = abs(real(sorted_eigs[target_j]))
     # Sort certified eigenvalues by distance to target
     distances = [(j, abs(real(sorted_eigs[j]) - real(sorted_eigs[target_j]))) for j in certified_set]
     sort!(distances, by=x -> x[2])
-    # Take the k_max nearest
     selected = [d[1] for d in distances[1:min(k_max, length(distances))]]
-    return sort(selected)  # return in order
+    return sort(selected)
 end
 
 println("\n" * "=" ^ 70)
 println("Testing BigFloat deflation (ordschur + selective) for eigenvalues $TEST_RANGE")
 println("Max deflation neighbors: $MAX_DEFLATION_NEIGHBORS")
+println("ordschur projects ALL eigenvalues 1-20 to T₁₁")
 println("=" ^ 70)
 flush(stdout)
 
@@ -104,9 +108,13 @@ for j in TEST_RANGE
     λ_tgt = real(sorted_eigs[j])
     deflation_indices = select_nearby_deflation(j, certified_set, sorted_eigs)
 
+    # ordschur_indices: move ALL certified eigenvalues to T₁₁
+    # This ensures T₂₂ only has small eigenvalues, so p(T₂₂) is well-conditioned
+    ordschur_all = sort(collect(certified_set))
+
     println("\n--- Eigenvalue j=$j: λ ≈ $(round(λ_tgt, sigdigits=6)) ---")
     println("  Deflating $(length(deflation_indices)) nearby eigenvalues: $deflation_indices")
-    println("  Deflation zeros: ", round.(real.(sorted_eigs[deflation_indices]), sigdigits=4))
+    println("  ordschur moves $(length(ordschur_all)) eigenvalues to T₁₁")
     flush(stdout)
 
     t_cert = @elapsed begin
@@ -116,7 +124,8 @@ for j in TEST_RANGE
             image_circle_radius=0.3,
             image_circle_samples=256,
             backmap_order=2,
-            use_ordschur=true)
+            use_ordschur=true,
+            ordschur_indices=ordschur_all)
     end
 
     results[j] = result
