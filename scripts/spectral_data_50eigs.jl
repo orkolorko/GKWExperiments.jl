@@ -274,8 +274,9 @@ else
         q1_vectors[j] = BallArithmetic.mid(Q_ord_ball)[:, 1]
 
         # 2. Certified Sylvester solve (BallMatrix overload — auto-propagates T radii)
-        Y_transposed_ball = triangular_sylvester_miyajima_enclosure(T_ord_ball, 1)
-        # Y_transposed_ball is (n-1)×1 BallMatrix; Y = transpose(Y_transposed) is the coupling
+        X_ball = triangular_sylvester_miyajima_enclosure(T_ord_ball, 1)
+        # X_ball is (n-1)×1 BallMatrix satisfying T₂₂^H X - X T₁₁^H = T₁₂^H
+        # Coupling matrix Y in P = [I, Y; 0, 0]: Y = -X^H (NOT transpose(X))
 
         # 3. ℓ_j(1) from spectral projector: P_S = [I, Y; 0, 0]
         Q_ord_mid = BallArithmetic.mid(Q_ord_ball)
@@ -283,14 +284,16 @@ else
         q1 = q[1]
         q_rest = q[2:end]
 
-        Yt_mid = BallArithmetic.mid(Y_transposed_ball)[:, 1]   # (n-1) vector
-        Yt_rad = BallArithmetic.rad(Y_transposed_ball)[:, 1]   # (n-1) vector
+        X_mid = BallArithmetic.mid(X_ball)[:, 1]   # (n-1) vector
+        X_rad = BallArithmetic.rad(X_ball)[:, 1]    # (n-1) vector
 
-        ell_center[j] = real(q1 + transpose(Yt_mid) * q_rest)
+        # Y · q_rest = -X^H · q_rest = -dot(X_mid, q_rest)
+        ell_center[j] = real(q1 - dot(X_mid, q_rest))
 
         # 4. Sylvester error: componentwise propagation from BallMatrix radii
+        #    |Y_ij - Y_ij^exact| = |conj(X_ji) - conj(X_ji^exact)| ≤ rad(X)_ji
         sylv_err = setrounding(BigFloat, RoundUp) do
-            sum(BigFloat(Yt_rad[i]) * abs(q_rest[i]) for i in 1:n-1)
+            sum(BigFloat(X_rad[i]) * abs(q_rest[i]) for i in 1:n-1)
         end
 
         # 5. Projector perturbation via resolvent bounds from Script 1
@@ -304,7 +307,8 @@ else
 
         # 6. NK eigenvector correction
         #    P_Schur = [I, Y; 0, 0] has ||P_Schur||₂ = sqrt(1 + ||Y||₂²)
-        yt_norm = upper_bound_L2_opnorm(Y_transposed_ball)
+        #    ||Y|| = ||X^H|| = ||X|| (operator norm is unitarily invariant)
+        yt_norm = upper_bound_L2_opnorm(X_ball)
         proj_schur_norm = setrounding(BigFloat, RoundUp) do
             sqrt(one(BigFloat) + yt_norm * yt_norm)
         end
