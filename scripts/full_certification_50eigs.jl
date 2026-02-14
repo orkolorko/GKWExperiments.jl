@@ -497,21 +497,28 @@ else
     else
         r11_tail = setrounding(Float64, RoundUp) do; 1.0 / sig11_on_circle; end
 
-        # T22 via CertifScripts (with svdbox fallback)
+        # T22 via CertifScripts (with svdbox fallback if Inf or exception)
         @info "Certifying T22 resolvent on tail circle..."
         T22_tail_f64 = bigfloat_ball_to_float64_ball(BallMatrix(T22_tail_bf))
         circle_tail = CertificationCircle(ComplexF64(0.0), rho_tail; samples=CIRCLE_SAMPLES)
         t0 = time()
-        max_res_T22_tail = try
-            cert_T22_tail = run_certification(T22_tail_f64, circle_tail; log_io=devnull)
-            @info "  T22: CertifScripts succeeded"
-            cert_T22_tail.resolvent_original
+
+        cert_T22_tail = try
+            run_certification(T22_tail_f64, circle_tail; log_io=devnull)
         catch e
-            @warn "  T22: CertifScripts failed, using manual svdbox scan" exception=(e,)
+            @warn "  T22: CertifScripts threw" exception=(e,)
+            nothing
+        end
+
+        if cert_T22_tail !== nothing && isfinite(cert_T22_tail.resolvent_original)
+            max_res_T22_tail = cert_T22_tail.resolvent_original
+            @info "  T22: CertifScripts succeeded"
+        else
+            @info "  T22: CertifScripts cannot certify, using manual svdbox scan"
             d_max = setrounding(Float64, RoundUp) do
                 2.0 * rho_tail * sin(π / (2 * CIRCLE_SAMPLES))
             end
-            max_r = 0.0
+            max_res_T22_tail = 0.0
             for s_idx in 0:(CIRCLE_SAMPLES - 1)
                 θ = 2π * s_idx / CIRCLE_SAMPLES
                 z = ComplexF64(rho_tail * cos(θ), rho_tail * sin(θ))
@@ -522,12 +529,11 @@ else
                 σ_lower = σ_at_sample - d_max
                 if σ_lower <= 0
                     @error "σ_min(zI-T22) ≤ 0 at tail circle sample s=$s_idx" σ_at_sample d_max
-                    max_r = Inf; break
+                    max_res_T22_tail = Inf; break
                 end
                 r22 = setrounding(Float64, RoundUp) do; 1.0 / σ_lower; end
-                max_r = max(max_r, r22)
+                max_res_T22_tail = max(max_res_T22_tail, r22)
             end
-            max_r
         end
         @printf("  T22 resolvent <= %.6e  [%.1fs]\n", max_res_T22_tail, time()-t0)
 

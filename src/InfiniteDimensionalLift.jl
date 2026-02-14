@@ -1617,13 +1617,19 @@ function certify_eigenvalue_schur_direct(A_f64::BallMatrix, schur_position::Int;
         circle_T22 = CertificationCircle(λ_tgt, circle_radius_f64; samples=circle_samples)
         t22_method = :none
 
-        try
-            cert_T22 = run_certification(T22_f64, circle_T22; log_io=devnull)
+        cert_T22 = try
+            run_certification(T22_f64, circle_T22; log_io=devnull)
+        catch e
+            @warn "CertifScripts threw for T₂₂" exception=(e,)
+            nothing
+        end
+
+        if cert_T22 !== nothing && isfinite(cert_T22.resolvent_original)
             max_res_T22 = cert_T22.resolvent_original
             t22_method = :certifscripts
-            @info "T₂₂ via CertifScripts" max_res_T22 cert_T22.resolvent_schur cert_T22.minimum_singular_value
-        catch e
-            @warn "CertifScripts failed for T₂₂, falling back to manual svdbox scan" exception=(e,)
+            @info "T₂₂ via CertifScripts" max_res_T22 cert_T22.minimum_singular_value
+        else
+            @info "CertifScripts cannot certify T₂₂, falling back to manual svdbox scan"
 
             # Manual svdbox scan with Weyl inter-sample correction
             d_max = setrounding(Float64, RoundUp) do
