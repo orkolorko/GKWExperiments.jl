@@ -1323,35 +1323,37 @@ function certify_eigenvalue_ordschur_direct(A_f64::BallMatrix, lambda_tgt::Numbe
     T12_bf = T_ord[1:k_block, k_block+1:end]
     T22_bf = T_ord[k_block+1:end, k_block+1:end]
 
-    T11_f64 = bigfloat_ball_to_float64_ball(BallMatrix(T11_bf))
-    T12_f64 = bigfloat_ball_to_float64_ball(BallMatrix(T12_bf))
+    # Only convert T₁₂ and T₂₂ to Float64; T₁₁ stays BigFloat for inverse norm
     T22_f64 = bigfloat_ball_to_float64_ball(BallMatrix(T22_bf))
 
-    # ‖T₁₂‖_F (rigorous upper bound)
-    T12_abs = abs.(BallArithmetic.mid(T12_f64)) .+ BallArithmetic.rad(T12_f64)
-    T12_norm = setrounding(Float64, RoundUp) do
-        sqrt(sum(T12_abs .^ 2))
-    end
+    # ‖T₁₂‖_F (rigorous upper bound via BigFloat → Float64)
+    T12_bf_abs = abs.(T12_bf)
+    T12_norm_bf = sqrt(sum(T12_bf_abs .^ 2))
+    T12_norm = _bigfloat_to_float64_upper(T12_norm_bf)
 
     @info "ordschur direct" k_block m_block T12_norm
 
     # Step 4: Auto-set circle radius if needed
     # Find nearest eigenvalue to λ_tgt (excluding itself)
+    λ_tgt_bf = BigFloat(real(λ_tgt))
     if circle_radius <= 0
         # Find target in sorted list
-        tgt_idx_in_sorted = findfirst(i -> abs(Float64(real(sorted_eigs[i])) - real(λ_tgt)) < 1e-30, 1:n_full)
-        min_dist = Inf
+        tgt_idx_in_sorted = findfirst(i -> abs(real(sorted_eigs[i]) - λ_tgt_bf) < BigFloat(1e-30), 1:n_full)
+        min_dist = BigFloat(Inf)
         for i in 1:n_full
             i == tgt_idx_in_sorted && continue
-            d = abs(ComplexF64(sorted_eigs[i]) - λ_tgt)
+            d = abs(sorted_eigs[i] - λ_tgt_bf)
             min_dist = min(min_dist, d)
         end
-        circle_radius = min_dist / 2.0
-        @info "auto circle radius" min_dist circle_radius
+        circle_radius = Float64(min_dist) / 2.0
+        @info "auto circle radius" Float64(min_dist) circle_radius
     end
     circle_radius_f64 = Float64(circle_radius)
 
     # Step 5: Certify resolvent on circle around λ_tgt
+    # T₁₁ is upper triangular with large eigenvalues → use BigFloat triangular
+    # inverse norm bound (svdbox fails in Float64 when condition number > 10¹⁶).
+    # T₂₂ has small entries → svdbox in Float64 works fine.
     norm_Z_f64 = _ball_to_float64_upper(norm_Z_bf)
     norm_Z_inv_f64 = _ball_to_float64_upper(norm_Z_inv_bf)
 
@@ -1361,37 +1363,34 @@ function certify_eigenvalue_ordschur_direct(A_f64::BallMatrix, lambda_tgt::Numbe
 
     for s in 0:(circle_samples - 1)
         θ = 2π * s / circle_samples
-        z = ComplexF64(real(λ_tgt) + circle_radius_f64 * cos(θ),
-                       imag(λ_tgt) + circle_radius_f64 * sin(θ))
+        z_bf = Complex{BigFloat}(λ_tgt_bf + BigFloat(circle_radius_f64) * cos(BigFloat(θ)),
+                                  BigFloat(circle_radius_f64) * sin(BigFloat(θ)))
+        z_f64 = ComplexF64(z_bf)
 
-        # σ_min(zI - T₁₁)
-        sv11 = svdbox(T11_f64 - z * I)
-        σ11_ball = sv11[end]
-        σ11_lower = max(Float64(BallArithmetic.mid(σ11_ball)) -
-                        Float64(BallArithmetic.rad(σ11_ball)), 0.0)
+        # ‖(zI - T₁₁)⁻¹‖₂ via triangular backward recursion in BigFloat
+        # T₁₁ is upper triangular → zI - T₁₁ is upper triangular
+        zI_T11 = z_bf * I - T11_bf
+        inv_norm_11 = BallArithmetic.triangular_inverse_two_norm_bound(zI_T11)
+        r11 = _bigfloat_to_float64_upper(inv_norm_11)
 
-        # σ_min(zI - T₂₂)
-        sv22 = svdbox(T22_f64 - z * I)
+        # σ_min(zI - T₂₂) via svdbox (T₂₂ has small entries, well-conditioned)
+        sv22 = svdbox(T22_f64 - z_f64 * I)
         σ22_ball = sv22[end]
         σ22_lower = max(Float64(BallArithmetic.mid(σ22_ball)) -
                         Float64(BallArithmetic.rad(σ22_ball)), 0.0)
 
-        if σ11_lower <= 0 || σ22_lower <= 0
-            @warn "σ_min ≤ 0 at sample s=$s" σ11_lower σ22_lower
+        if !isfinite(r11) || σ22_lower <= 0
+            @warn "resolvent bound failed at sample s=$s" r11 σ22_lower
             max_resolvent = Inf
             break
         end
 
-        # Block formula: ‖(zI-T)⁻¹‖ ≤ 1/σ₁₁ · (1 + ‖T₁₂‖/σ₂₂) + 1/σ₂₂
+        # Block formula: ‖(zI-T)⁻¹‖ ≤ ‖(zI-T₁₁)⁻¹‖·(1 + ‖T₁₂‖/σ₂₂) + 1/σ₂₂
         res_z = setrounding(Float64, RoundUp) do
-            inv_σ11 = 1.0 / σ11_lower
             inv_σ22 = 1.0 / σ22_lower
-            inv_σ11 * (1.0 + T12_norm * inv_σ22) + inv_σ22
+            r11 * (1.0 + T12_norm * inv_σ22) + inv_σ22
         end
 
-        r11 = setrounding(Float64, RoundUp) do
-            1.0 / σ11_lower
-        end
         r22 = setrounding(Float64, RoundUp) do
             1.0 / σ22_lower
         end
