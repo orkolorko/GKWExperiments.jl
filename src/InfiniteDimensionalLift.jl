@@ -1011,26 +1011,33 @@ function certify_eigenvalue_deflation_bigfloat(A_f64::BallMatrix, lambda_tgt::Nu
     end
     S_bf, _, _, norm_Z_bf, norm_Z_inv_bf = schur_data_bf
 
-    # Step 3: BigFloat deflation polynomial from Schur diagonal eigenvalues
+    # Step 3: Build polynomial p(z)
     T_bf_diag = diag(S_bf.T)
     sorted_idx = sortperm(abs.(T_bf_diag), rev=true)
-    bf_zeros = BigFloat.(real.(T_bf_diag[sorted_idx[certified_indices]]))
-    bf_coeffs = deflation_polynomial(bf_zeros, BigFloat(real(λ_tgt)); q=q)
+
+    if isempty(certified_indices)
+        # No deflation zeros → linear rescaling: p(z) = z / λ_tgt
+        # Maps target eigenvalue to 1, all others to λ_j / λ_tgt
+        bf_coeffs = [BigFloat(0), inv(BigFloat(real(λ_tgt)))]
+    else
+        # Deflation polynomial with zeros at certified eigenvalues
+        bf_zeros = BigFloat.(real.(T_bf_diag[sorted_idx[certified_indices]]))
+        bf_coeffs = deflation_polynomial(bf_zeros, BigFloat(real(λ_tgt)); q=q)
+    end
     poly_degree = length(bf_coeffs) - 1
 
+    # Determine ordschur indices
+    ords_avail = ordschur_indices !== nothing ? ordschur_indices :
+                 (!isempty(certified_indices) ? certified_indices : Int[])
+
     # Step 4–6: Evaluate p(T) and certify σ_min on image circle
-    if use_ordschur && !isempty(certified_indices)
+    if use_ordschur && !isempty(ords_avail)
         # === ordschur path: project away certified eigenvalues ===
         # Move certified eigenvalues to top-left block of Schur form.
         # After ordschur: T_ord = [T₁₁ T₁₂; 0 T₂₂] with σ(T₁₁) = certified eigs.
         # p(T_ord) = [p(T₁₁) B_off; 0 p(T₂₂)] with p(T₁₁) ≈ 0 (zeros match eigs).
         # Weyl bound: σ_min(zI-p(T)) ≥ min(σ_min(zI-p(T₁₁)), σ_min(zI-p(T₂₂))) - ‖B_off‖.
-        # ordschur_indices controls which eigenvalues move to T₁₁.
-        # Default: same as certified_indices (deflation zeros only).
-        # For better conditioning: pass all eigenvalues with |λ| > |λ_tgt| so T₂₂
-        # only contains small eigenvalues, avoiding huge p(T₂₂) entries.
-        ords_indices = ordschur_indices === nothing ? certified_indices : ordschur_indices
-        schur_ords_indices = sorted_idx[ords_indices]
+        schur_ords_indices = sorted_idx[ords_avail]
         # Q_ord not needed: Givens rotations are unitary, so ‖Q_ord‖ = ‖Q‖.
         # The Schur bridge uses original norm_Z, norm_Z_inv.
         T_ord, _, k_block = _bigfloat_ordschur_block(
@@ -1170,7 +1177,8 @@ function certify_eigenvalue_deflation_bigfloat(A_f64::BallMatrix, lambda_tgt::Nu
     end
 
     timing = time() - t0
-    cert_eigs = ComplexF64.(bf_zeros)
+    cert_eigs = isempty(certified_indices) ? ComplexF64[] :
+                ComplexF64.(BigFloat.(real.(T_bf_diag[sorted_idx[certified_indices]])))
 
     return DeflationCertificationResult(
         λ_tgt, λ_radius, Ball(λ_tgt, λ_radius),

@@ -1,24 +1,21 @@
 #!/usr/bin/env julia
 """
-Test BigFloat deflation certification at K=256 on ibis.
+Test ordschur + linear rescaling certification at K=256 on ibis.
 
-Uses cached BallMatrix and memoized BigFloat Schur, then certifies
-eigenvalues via polynomial deflation with ordschur projection.
+After ordschur projects eigenvalues 1-20 to T₁₁, T₂₂ only contains small
+eigenvalues. We certify using p(z) = z/λ_tgt (linear rescaling to map target
+to 1), with NO deflation zeros. This gives:
+  - bridge constant C_r ~ 1/|λ_tgt| (minimal)
+  - eps_p = ε_K · C_r ~ ε_K / |λ_tgt| ~ 10⁻³⁵ (tiny)
+  - M_r bounded by eigenvalue separation in T₂₂/λ_tgt
 
-Key design choices:
-1. **Selective deflation**: Only deflate the k nearest eigenvalues (k ≤ 5)
-   to keep polynomial degree and bridge constant manageable.
-2. **Full ordschur projection**: Move ALL certified eigenvalues (1-20) to T₁₁
-   so that T₂₂ contains only small eigenvalues. This prevents the polynomial
-   from mapping large eigenvalues (λ₁ = 1, etc.) to ~10^37 inside T₂₂.
-3. **Memoized Schur**: Cache the BigFloat Schur decomposition to avoid
-   recomputing it (150s) across runs.
+Much simpler and more robust than polynomial deflation with multiple zeros.
 """
 
 using GKWExperiments, BallArithmetic, ArbNumerics, LinearAlgebra, Serialization, Dates
 
 println("=" ^ 70)
-println("BigFloat Deflation Certification (ordschur + selective) — K=256")
+println("Ordschur + Linear Rescaling Certification — K=256")
 println("=" ^ 70)
 println("Started: ", Dates.now())
 flush(stdout)
@@ -51,13 +48,13 @@ if isfile(SCHUR_CACHE_PATH)
     sd_bf = Serialization.deserialize(SCHUR_CACHE_PATH)
     println("  Loaded successfully")
 else
-    println("\nComputing BigFloat Schur decomposition (will cache for future runs)...")
+    println("\nComputing BigFloat Schur decomposition (will cache)...")
     flush(stdout)
     t_schur = @elapsed begin
         A_bf = float64_ball_to_bigfloat_ball(A_ball)
         sd_bf = compute_schur_and_error(A_bf)
     end
-    println("  Done in $(round(t_schur, digits=1))s — saving to $SCHUR_CACHE_PATH")
+    println("  Done in $(round(t_schur, digits=1))s — saving cache")
     Serialization.serialize(SCHUR_CACHE_PATH, sd_bf)
 end
 S_bf = sd_bf[1]
@@ -65,67 +62,35 @@ println("  norm_Z = ", Float64(sd_bf[4]))
 println("  norm_Z_inv = ", Float64(sd_bf[5]))
 flush(stdout)
 
-# Verify Schur eigenvalue ordering matches sorted Float64 eigenvalues
-T_bf_diag = diag(S_bf.T)
-schur_sorted_idx = sortperm(abs.(T_bf_diag), rev=true)
-println("\n  Schur eigenvalue comparison (top 5):")
-for j in 1:5
-    bf_eig = Float64(real(T_bf_diag[schur_sorted_idx[j]]))
-    f64_eig = real(sorted_eigs[j])
-    println("    j=$j: Schur=$(round(bf_eig, sigdigits=8)), Float64=$(round(f64_eig, sigdigits=8))")
-end
-flush(stdout)
-
 # === Configuration ===
-const CERTIFIED_RANGE = 1:20       # already certified (BigFloat resolvent)
-const TEST_RANGE = 21:50           # targets for deflation certification
-const MAX_DEFLATION_NEIGHBORS = 5  # max nearby eigenvalues to deflate
-const ALL_CERTIFIED = collect(CERTIFIED_RANGE)  # for ordschur: move ALL to T₁₁
-
-"""
-Select the k nearest certified eigenvalues to the target for deflation.
-Returns indices (in magnitude-sorted order) of eigenvalues to deflate.
-"""
-function select_nearby_deflation(target_j, certified_set, sorted_eigs; k_max=MAX_DEFLATION_NEIGHBORS)
-    # Sort certified eigenvalues by distance to target
-    distances = [(j, abs(real(sorted_eigs[j]) - real(sorted_eigs[target_j]))) for j in certified_set]
-    sort!(distances, by=x -> x[2])
-    selected = [d[1] for d in distances[1:min(k_max, length(distances))]]
-    return sort(selected)
-end
+const CERTIFIED_RANGE = 1:20  # already certified → move to T₁₁ via ordschur
+const TEST_RANGE = 21:50      # targets for certification
 
 println("\n" * "=" ^ 70)
-println("Testing BigFloat deflation (ordschur + selective) for eigenvalues $TEST_RANGE")
-println("Max deflation neighbors: $MAX_DEFLATION_NEIGHBORS")
-println("ordschur projects ALL eigenvalues 1-20 to T₁₁")
+println("Certifying eigenvalues $TEST_RANGE via ordschur + linear rescaling")
+println("ordschur projects eigenvalues 1-20 to T₁₁, polynomial p(z) = z/λ_tgt")
 println("=" ^ 70)
 flush(stdout)
 
 results = Dict{Int, Any}()
-certified_set = Set(CERTIFIED_RANGE)
+ordschur_set = collect(CERTIFIED_RANGE)
 
 for j in TEST_RANGE
     λ_tgt = real(sorted_eigs[j])
-    deflation_indices = select_nearby_deflation(j, certified_set, sorted_eigs)
-
-    # ordschur_indices: move ALL certified eigenvalues to T₁₁
-    # This ensures T₂₂ only has small eigenvalues, so p(T₂₂) is well-conditioned
-    ordschur_all = sort(collect(certified_set))
 
     println("\n--- Eigenvalue j=$j: λ ≈ $(round(λ_tgt, sigdigits=6)) ---")
-    println("  Deflating $(length(deflation_indices)) nearby eigenvalues: $deflation_indices")
-    println("  ordschur moves $(length(ordschur_all)) eigenvalues to T₁₁")
+    println("  ordschur moves $(length(ordschur_set)) eigenvalues to T₁₁")
     flush(stdout)
 
     t_cert = @elapsed begin
         result = certify_eigenvalue_deflation_bigfloat(
-            A_ball, λ_tgt, deflation_indices;
+            A_ball, λ_tgt, Int[];  # no deflation zeros → p(z) = z/λ_tgt
             K=K, schur_data_bf=sd_bf,
             image_circle_radius=0.3,
             image_circle_samples=256,
             backmap_order=2,
             use_ordschur=true,
-            ordschur_indices=ordschur_all)
+            ordschur_indices=ordschur_set)
     end
 
     results[j] = result
@@ -139,9 +104,9 @@ for j in TEST_RANGE
     println("  timing = ", round(t_cert, digits=2), "s")
     flush(stdout)
 
-    # If certified, add to the set for future deflation
+    # If certified, add to ordschur set for future eigenvalues
     if result.is_certified
-        push!(certified_set, j)
+        push!(ordschur_set, j)
     end
 end
 
