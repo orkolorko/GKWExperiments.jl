@@ -1354,34 +1354,27 @@ function certify_eigenvalue_ordschur_direct(A_f64::BallMatrix, lambda_tgt::Numbe
     norm_Z_f64 = _ball_to_float64_upper(norm_Z_bf)
     norm_Z_inv_f64 = _ball_to_float64_upper(norm_Z_inv_bf)
 
-    # T₁₁: compute ‖(zI-T₁₁)⁻¹‖ once at circle center, then propagate via Weyl.
+    # T₁₁: compute σ_min(z₀I - T₁₁) once at circle center, then propagate via Weyl.
     # Since all T₁₁ eigenvalues are far from λ_tgt (distance ≫ circle_radius),
     # Weyl's perturbation gives: σ_min(zI-T₁₁) ≥ σ_min(z₀I-T₁₁) - |z-z₀|
     # where z₀ = λ_tgt and |z-z₀| = circle_radius on the circle.
     #
-    # Strategy: try BigFloat svdbox first (tighter bound for small matrices),
-    # fall back to triangular_inverse_two_norm_bound if SVD verification fails
-    # (happens when condition number > ~10¹⁵).
+    # Use GenericLinearAlgebra's native BigFloat SVD (not Ogita refinement which
+    # uses Float64 seed and fails at condition number > ~10¹⁵). The native SVD
+    # computes directly in BigFloat, achieving residuals ~10⁻⁷⁴.
     z0_bf = Complex{BigFloat}(λ_tgt_bf, zero(BigFloat))
     zI_T11_center = z0_bf * I - Complex{BigFloat}.(T11_bf)
+    zI_T11_ball = BallMatrix(zI_T11_center)
 
-    # Try BigFloat svdbox
-    sv11_center = svdbox(BallMatrix(zI_T11_center))
+    # Native BigFloat SVD via GenericLinearAlgebra, then Miyajima certification
+    svdA = svd(zI_T11_center)  # dispatches to GenericLinearAlgebra for BigFloat
+    sv11_result = BallArithmetic._certify_svd(
+        zI_T11_ball, svdA, BallArithmetic.MiyajimaM1(); apply_vbd=true)
+    sv11_center = sv11_result.singular_values
     σ11_center_ball = sv11_center[end]
     σ11_center_lower_bf = BallArithmetic.mid(σ11_center_ball) - BallArithmetic.rad(σ11_center_ball)
     σ11_center_lower = max(Float64(σ11_center_lower_bf), 0.0)
-    t11_method = :svdbox
-
-    if σ11_center_lower <= 0
-        # svdbox failed (SVD verification failure at high condition number).
-        # Fall back to triangular_inverse_two_norm_bound (exact for upper triangular).
-        # ‖(zI-T₁₁)⁻¹‖₂ ≤ √(‖(zI-T₁₁)⁻¹‖₁ · ‖(zI-T₁₁)⁻¹‖_∞) via backward recursion.
-        inv_norm_bf = BallArithmetic.triangular_inverse_two_norm_bound(zI_T11_center)
-        if isfinite(inv_norm_bf)
-            σ11_center_lower = 1.0 / _bigfloat_to_float64_upper(inv_norm_bf)
-            t11_method = :triangular_inverse
-        end
-    end
+    t11_method = :svd_gla
 
     # Propagate to circle: σ_min(zI-T₁₁) ≥ σ_min(z₀I-T₁₁) - ρ
     σ11_on_circle = σ11_center_lower - circle_radius_f64
