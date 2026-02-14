@@ -5,16 +5,17 @@ Test BigFloat deflation certification at K=256 on ibis.
 Uses cached BallMatrix, computes BigFloat Schur once, then certifies
 eigenvalues via polynomial deflation with ordschur projection.
 
-The ordschur approach moves certified eigenvalues to the top-left block
-of the Schur form, then certifies only the smaller p(T₂₂) block via svdbox.
-This avoids ill-conditioning when the full p(T) has eigenvalues spanning
-many orders of magnitude (the original approach failed with σ_min = 0).
+Key insight: deflating ALL 20 previously certified eigenvalues creates a
+degree-20 polynomial with bridge constant ~10^85 (normalization factor
+1/∏(λ_tgt - λᵢ) is enormous when zeros span [10⁻⁹, 1]). Instead, we
+selectively deflate only the k nearest eigenvalues (k ≤ 5), keeping the
+polynomial degree low and the bridge constant manageable.
 """
 
 using GKWExperiments, BallArithmetic, ArbNumerics, LinearAlgebra, Serialization, Dates
 
 println("=" ^ 70)
-println("BigFloat Deflation Certification (ordschur) — K=256")
+println("BigFloat Deflation Certification (ordschur + selective) — K=256")
 println("=" ^ 70)
 println("Started: ", Dates.now())
 flush(stdout)
@@ -63,28 +64,54 @@ for j in 1:5
 end
 flush(stdout)
 
-# Assume eigenvalues 1:20 are already certified (from previous BigFloat resolvent run)
-# Test deflation certification for eigenvalues 21-50
+# === Selective deflation strategy ===
+# For each target eigenvalue, only deflate the k nearest certified eigenvalues.
+# This keeps the polynomial degree low and the bridge constant manageable.
+#
+# Why: A degree-d polynomial with normalization 1/∏(λ_tgt - λᵢ) has
+# bridge constant C_r ~ (1/gap)^d. For d=20 with zeros spanning [10⁻⁹, 1],
+# C_r ~ 10^85. For d=3 with nearby zeros (gap ~ 10⁻⁸), C_r ~ 10^24,
+# giving eps_p ~ 10⁻²⁰ << 1.
+
 const CERTIFIED_RANGE = 1:20
 const TEST_RANGE = 21:50
+const MAX_DEFLATION_NEIGHBORS = 5  # max nearby eigenvalues to deflate
+
+"""
+Select the k nearest certified eigenvalues to the target for deflation.
+Returns indices (in magnitude-sorted order) of eigenvalues to deflate.
+"""
+function select_nearby_deflation(target_j, certified_set, sorted_eigs; k_max=MAX_DEFLATION_NEIGHBORS)
+    λ_tgt = abs(real(sorted_eigs[target_j]))
+    # Sort certified eigenvalues by distance to target
+    distances = [(j, abs(real(sorted_eigs[j]) - real(sorted_eigs[target_j]))) for j in certified_set]
+    sort!(distances, by=x -> x[2])
+    # Take the k_max nearest
+    selected = [d[1] for d in distances[1:min(k_max, length(distances))]]
+    return sort(selected)  # return in order
+end
 
 println("\n" * "=" ^ 70)
-println("Testing BigFloat deflation (ordschur) for eigenvalues $TEST_RANGE")
-println("Using eigenvalues $CERTIFIED_RANGE as initial certified deflation zeros")
+println("Testing BigFloat deflation (ordschur + selective) for eigenvalues $TEST_RANGE")
+println("Max deflation neighbors: $MAX_DEFLATION_NEIGHBORS")
 println("=" ^ 70)
 flush(stdout)
 
 results = Dict{Int, Any}()
-certified_indices = collect(CERTIFIED_RANGE)
+certified_set = Set(CERTIFIED_RANGE)
 
 for j in TEST_RANGE
     λ_tgt = real(sorted_eigs[j])
+    deflation_indices = select_nearby_deflation(j, certified_set, sorted_eigs)
+
     println("\n--- Eigenvalue j=$j: λ ≈ $(round(λ_tgt, sigdigits=6)) ---")
+    println("  Deflating $(length(deflation_indices)) nearby eigenvalues: $deflation_indices")
+    println("  Deflation zeros: ", round.(real.(sorted_eigs[deflation_indices]), sigdigits=4))
     flush(stdout)
 
     t_cert = @elapsed begin
         result = certify_eigenvalue_deflation_bigfloat(
-            A_ball, λ_tgt, certified_indices;
+            A_ball, λ_tgt, deflation_indices;
             K=K, schur_data_bf=sd_bf,
             image_circle_radius=0.3,
             image_circle_samples=256,
@@ -95,7 +122,7 @@ for j in TEST_RANGE
     results[j] = result
     println("  method = ", result.certification_method)
     println("  certified = ", result.is_certified)
-    println("  small_gain = ", result.small_gain_factor)
+    println("  small_gain α = ", result.small_gain_factor)
     println("  resolvent_Mr = ", result.resolvent_Mr)
     println("  bridge_const = ", result.bridge_constant)
     println("  eps_p = ", result.poly_perturbation_bound)
@@ -103,9 +130,9 @@ for j in TEST_RANGE
     println("  timing = ", round(t_cert, digits=2), "s")
     flush(stdout)
 
-    # If certified, add to the set for incremental deflation
+    # If certified, add to the set for future deflation
     if result.is_certified
-        push!(certified_indices, j)
+        push!(certified_set, j)
     end
 end
 
