@@ -145,10 +145,25 @@ else
         schur_seed = (Complex{BigFloat}.(sd_bf[1].Z), Complex{BigFloat}.(sd_bf[1].T))
     end
 
+    # WORKAROUND: rigorous_schur_bigfloat passes complex A_mid (with tiny
+    # imaginary parts from Arb→BigFloat) to refine_schur_decomposition, which
+    # defeats the pre-convergence check for real GenericSchur seeds.
+    # Fix: refine against real(A_mid), then certify against full A_ball_bf.
     @info "Computing rigorous BallMatrix Schur decomposition..."
     t0 = time()
-    Q_ball, T_ball, schur_result = rigorous_schur_bigfloat(
-        A_ball_bf; target_precision=PRECISION, schur_seed=schur_seed)
+    A_real_center = real.(BallArithmetic.mid(A_ball_bf))
+    if schur_seed !== nothing
+        schur_result = refine_schur_decomposition(
+            A_real_center, schur_seed[1], schur_seed[2];
+            target_precision=PRECISION, max_iterations=20)
+    else
+        # Float64 seed fallback
+        F = schur(convert.(ComplexF64, A_real_center))
+        schur_result = refine_schur_decomposition(
+            A_real_center, F.Z, F.T;
+            target_precision=PRECISION, max_iterations=20)
+    end
+    Q_ball, T_ball = certify_schur_decomposition(A_ball_bf, schur_result)
     @printf("  Done in %.1fs  (iterations=%d, converged=%s)\n",
             time()-t0, schur_result.iterations, schur_result.converged)
 
