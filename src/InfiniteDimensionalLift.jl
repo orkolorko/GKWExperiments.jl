@@ -1612,16 +1612,46 @@ function certify_eigenvalue_schur_direct(A_f64::BallMatrix, schur_position::Int;
         r11 = k_block > 0 ? setrounding(Float64, RoundUp) do; 1.0 / σ11_on_circle; end : 0.0
         max_res_T11 = r11
 
-        # T₂₂: use CertifScripts' run_certification for rigorous full-circle coverage.
-        # This handles adaptive arc refinement + Weyl inter-sample correction automatically.
+        # T₂₂: try CertifScripts first (adaptive arcs + Weyl), fall back to manual svdbox scan.
+        max_res_T22 = Inf
         circle_T22 = CertificationCircle(λ_tgt, circle_radius_f64; samples=circle_samples)
-        cert_T22 = run_certification(T22_f64, circle_T22; log_io=devnull)
+        t22_method = :none
 
-        # resolvent_original is the rigorous upper bound on max_z ||(zI-T₂₂)⁻¹||
-        # over the FULL circle (includes adaptive arcs + Schur bridge for T₂₂).
-        max_res_T22 = cert_T22.resolvent_original
+        try
+            cert_T22 = run_certification(T22_f64, circle_T22; log_io=devnull)
+            max_res_T22 = cert_T22.resolvent_original
+            t22_method = :certifscripts
+            @info "T₂₂ via CertifScripts" max_res_T22 cert_T22.resolvent_schur cert_T22.minimum_singular_value
+        catch e
+            @warn "CertifScripts failed for T₂₂, falling back to manual svdbox scan" exception=(e,)
 
-        @info "T₂₂ via CertifScripts" max_res_T22 cert_T22.resolvent_schur cert_T22.minimum_singular_value
+            # Manual svdbox scan with Weyl inter-sample correction
+            d_max = setrounding(Float64, RoundUp) do
+                2.0 * circle_radius_f64 * sin(π / (2 * circle_samples))
+            end
+            max_res_T22 = 0.0
+            scan_ok = true
+            for s_idx in 0:(circle_samples - 1)
+                θ = 2π * s_idx / circle_samples
+                z_f64 = ComplexF64(real(λ_tgt) + circle_radius_f64 * cos(θ),
+                                   imag(λ_tgt) + circle_radius_f64 * sin(θ))
+                sv22 = svdbox(T22_f64 - z_f64 * I)
+                σ22_ball = sv22[end]
+                σ22_at_sample = max(Float64(BallArithmetic.mid(σ22_ball)) -
+                                    Float64(BallArithmetic.rad(σ22_ball)), 0.0)
+                σ22_lower = σ22_at_sample - d_max
+                if σ22_lower <= 0
+                    @warn "σ_min(zI-T₂₂) ≤ 0 after Weyl correction at s=$s_idx" σ22_at_sample d_max
+                    max_res_T22 = Inf
+                    scan_ok = false
+                    break
+                end
+                r22 = setrounding(Float64, RoundUp) do; 1.0 / σ22_lower; end
+                max_res_T22 = max(max_res_T22, r22)
+            end
+            t22_method = scan_ok ? :svdbox_manual : :failed
+            @info "T₂₂ via manual svdbox" max_res_T22 t22_method
+        end
 
         # Block triangular formula (r11 is constant via Weyl, so max is at max of 1/σ₂₂):
         # max_z f(z) = r11 · (1 + T12_norm · max_res_T22) + max_res_T22
