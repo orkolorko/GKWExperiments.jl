@@ -55,6 +55,36 @@ const RESULTS_PATH    = joinpath(DATA_DIR, "script2_results.jls")
 # Helper: rigorous Arb -> Float64 upper bound
 const _arb_to_float64_upper = GKWExperiments.NewtonKantorovichCertification._arb_to_float64_upper
 
+# Helper: compute ||Q_N * e_0|| (avoids Julia global-scope for-loop scoping issues)
+function _compute_Q_N_norm(n, N_eigs, ell_center, ell_radius, q1_vectors, proj_error_all)
+    q_center = zeros(Complex{BigFloat}, n)
+    q_center[1] = one(Complex{BigFloat})
+    q_radius_sum = BigFloat(0)
+
+    for j in 1:N_eigs
+        q_center .-= ell_center[j] .* q1_vectors[j]
+        q1_norm = BigFloat(norm(q1_vectors[j]))
+        q_radius_sum = setrounding(BigFloat, RoundUp) do
+            q_radius_sum + abs(ell_radius[j]) * q1_norm
+        end
+    end
+
+    norm_q_center = BigFloat(norm(real.(q_center)))
+    norm_Q_N_1_galerkin = setrounding(BigFloat, RoundUp) do
+        norm_q_center + q_radius_sum
+    end
+
+    total_proj_correction = setrounding(Float64, RoundUp) do
+        sum(proj_error_all[j] for j in 1:N_eigs if isfinite(proj_error_all[j]); init=0.0)
+    end
+
+    norm_Q_N_1 = setrounding(Float64, RoundUp) do
+        Float64(norm_Q_N_1_galerkin) + total_proj_correction
+    end
+
+    return norm_Q_N_1_galerkin, norm_Q_N_1
+end
+
 println("=" ^ 80)
 println("SCRIPT 2: SPECTRAL DATA FOR $NUM_EIGS GKW EIGENVALUES")
 println("  NK + ordschur + Sylvester + tail bound")
@@ -370,34 +400,10 @@ else
         # where P_j e_0 = ell_j * q1_j (spectral projector applied to e_0)
         @info "Computing ||Q_$NUM_EIGS * e_0|| from spectral projectors..."
 
-        q_center = zeros(Complex{BigFloat}, n)
-        q_center[1] = one(Complex{BigFloat})  # e_0
-        q_radius_sum = BigFloat(0)
-
-        for j in 1:NUM_EIGS
-            q_center .-= ell_center[j] .* q1_vectors[j]
-            q1_norm = BigFloat(norm(q1_vectors[j]))
-            q_radius_sum = setrounding(BigFloat, RoundUp) do
-                q_radius_sum + abs(ell_radius[j]) * q1_norm
-            end
-        end
-
-        norm_q_center = BigFloat(norm(real.(q_center)))
-        norm_Q_N_1_galerkin = setrounding(BigFloat, RoundUp) do
-            norm_q_center + q_radius_sum
-        end
-
-        # Correction for L_r vs A_K: ||Q_N(L_r)*1 - Q_N(A_K)*e_0|| <= sum proj_error_j
-        total_proj_correction = setrounding(Float64, RoundUp) do
-            sum(proj_error_all[j] for j in 1:NUM_EIGS if isfinite(proj_error_all[j]); init=0.0)
-        end
-
-        norm_Q_N_1 = setrounding(Float64, RoundUp) do
-            Float64(norm_Q_N_1_galerkin) + total_proj_correction
-        end
+        norm_Q_N_1_galerkin, norm_Q_N_1 = _compute_Q_N_norm(
+            n, NUM_EIGS, ell_center, ell_radius, q1_vectors, proj_error_all)
 
         @printf("  ||Q_%d(A_K) * e_0||  <= %.6e  (Galerkin)\n", NUM_EIGS, Float64(norm_Q_N_1_galerkin))
-        @printf("  Projector correction  = %.6e\n", total_proj_correction)
         @printf("  ||Q_%d(L_r) * 1||    <= %.6e  (rigorous)\n", NUM_EIGS, norm_Q_N_1)
 
         # Prefactor C = M_inf * ||Q_N * 1||
