@@ -52,6 +52,28 @@ setprecision(BigFloat, PRECISION)
 const DATA_DIR = joinpath(@__DIR__, "..", "data")
 mkpath(DATA_DIR)
 
+# Helper: manual svdbox scan on a circle (avoids scoping issues in for loops at global scope)
+function _scan_svdbox_circle(M_f64::BallMatrix, center::ComplexF64, radius::Float64, n_samples::Int)
+    d_max = setrounding(Float64, RoundUp) do
+        2.0 * radius * sin(π / (2 * n_samples))
+    end
+    max_r = 0.0
+    for s_idx in 0:(n_samples - 1)
+        θ = 2π * s_idx / n_samples
+        z = ComplexF64(real(center) + radius * cos(θ), imag(center) + radius * sin(θ))
+        sv = svdbox(M_f64 - z * I)
+        σ_ball = sv[end]
+        σ_lower = max(Float64(BallArithmetic.mid(σ_ball)) - Float64(BallArithmetic.rad(σ_ball)), 0.0) - d_max
+        if σ_lower <= 0
+            @warn "σ_min ≤ 0 after Weyl correction at s=$s_idx"
+            return Inf
+        end
+        r = setrounding(Float64, RoundUp) do; 1.0 / σ_lower; end
+        max_r = max(max_r, r)
+    end
+    return max_r
+end
+
 # Cache paths
 const CACHE_BALL_K256 = joinpath(DATA_DIR, "ball_matrix_K256.jls")
 const CACHE_SCHUR_K256 = joinpath(DATA_DIR, "bigfloat_schur_K256.jls")
@@ -510,30 +532,13 @@ else
             nothing
         end
 
+        max_res_T22_tail = Inf
         if cert_T22_tail !== nothing && isfinite(cert_T22_tail.resolvent_original)
             max_res_T22_tail = cert_T22_tail.resolvent_original
             @info "  T22: CertifScripts succeeded"
         else
             @info "  T22: CertifScripts cannot certify, using manual svdbox scan"
-            d_max = setrounding(Float64, RoundUp) do
-                2.0 * rho_tail * sin(π / (2 * CIRCLE_SAMPLES))
-            end
-            max_res_T22_tail = 0.0
-            for s_idx in 0:(CIRCLE_SAMPLES - 1)
-                θ = 2π * s_idx / CIRCLE_SAMPLES
-                z = ComplexF64(rho_tail * cos(θ), rho_tail * sin(θ))
-                sv = svdbox(T22_tail_f64 - z * I)
-                σ_ball = sv[end]
-                σ_at_sample = max(Float64(BallArithmetic.mid(σ_ball)) -
-                                  Float64(BallArithmetic.rad(σ_ball)), 0.0)
-                σ_lower = σ_at_sample - d_max
-                if σ_lower <= 0
-                    @error "σ_min(zI-T22) ≤ 0 at tail circle sample s=$s_idx" σ_at_sample d_max
-                    max_res_T22_tail = Inf; break
-                end
-                r22 = setrounding(Float64, RoundUp) do; 1.0 / σ_lower; end
-                max_res_T22_tail = max(max_res_T22_tail, r22)
-            end
+            max_res_T22_tail = _scan_svdbox_circle(T22_tail_f64, ComplexF64(0.0), rho_tail, CIRCLE_SAMPLES)
         end
         @printf("  T22 resolvent <= %.6e  [%.1fs]\n", max_res_T22_tail, time()-t0)
 
