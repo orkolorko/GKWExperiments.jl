@@ -830,6 +830,74 @@ function certify_eigenvalue_deflation(A::BallMatrix, lambda_tgt::Number,
 end
 
 # ============================================================================
+# BigFloat ordschur utilities
+# ============================================================================
+
+"""
+    _swap_schur_1x1!(T, Q, k)
+
+Swap adjacent eigenvalues at positions k and k+1 in the Schur form using
+a Givens rotation. Modifies T and Q in place.
+"""
+function _swap_schur_1x1!(T::AbstractMatrix, Q::AbstractMatrix, k::Int)
+    nn = size(T, 1)
+    a, b, c = T[k, k], T[k+1, k+1], T[k, k+1]
+    x = (b - a) / c    # CORRECT formula (not c/(b-a))
+    nrm = sqrt(one(x) + x * conj(x))
+    cs, sn = one(x) / nrm, x / nrm
+    for j in 1:nn
+        t1, t2 = T[k, j], T[k+1, j]
+        T[k, j]   = conj(cs) * t1 + conj(sn) * t2
+        T[k+1, j] = -sn * t1 + cs * t2
+    end
+    for i in 1:nn
+        t1, t2 = T[i, k], T[i, k+1]
+        T[i, k]   = t1 * cs + t2 * sn
+        T[i, k+1] = -t1 * conj(sn) + t2 * cs
+    end
+    for i in 1:nn
+        q1, q2 = Q[i, k], Q[i, k+1]
+        Q[i, k]   = q1 * cs + q2 * sn
+        Q[i, k+1] = -q1 * conj(sn) + q2 * cs
+    end
+    T[k+1, k] = zero(eltype(T))
+end
+
+"""
+    _bigfloat_ordschur_block(T, Q, select_indices)
+
+Reorder a Schur decomposition so that eigenvalues at `select_indices` are moved
+to the top-left block. Returns `(T_ord, Q_ord, k)` where `k = length(select_indices)`
+and `T_ord[1:k,1:k]` contains the selected eigenvalues.
+
+Works for BigFloat (LAPACK ordschur is Float64 only).
+"""
+function _bigfloat_ordschur_block(T, Q, select_indices::AbstractVector{<:Integer})
+    T_ord, Q_ord = copy(T), copy(Q)
+    n = size(T, 1)
+
+    # Track where each original index has moved
+    current_pos = collect(1:n)
+
+    for (dest, orig_idx) in enumerate(select_indices)
+        # Find current position of the eigenvalue originally at orig_idx
+        src = findfirst(==(orig_idx), current_pos)
+        # Bubble it up to position dest
+        for k in (src - 1):-1:dest
+            _swap_schur_1x1!(T_ord, Q_ord, k)
+            current_pos[k], current_pos[k+1] = current_pos[k+1], current_pos[k]
+        end
+    end
+
+    # Clean lower triangular
+    for i in 2:n, j in 1:i-1
+        T_ord[i, j] = zero(eltype(T_ord))
+    end
+
+    return T_ord, Q_ord, length(select_indices)
+end
+
+# ============================================================================
 # BigFloat Deflation Certification Pipeline
 # ============================================================================
 
@@ -869,6 +937,7 @@ end
                                            image_circle_samples::Int=256,
                                            backmap_order::Int=2,
                                            use_tight_bridge::Bool=true,
+                                           use_ordschur::Bool=true,
                                            schur_data_bf=nothing)
 
 Certify an eigenvalue via polynomial deflation using BigFloat Schur decomposition.
@@ -903,6 +972,11 @@ for fast SVD certification.
 - `image_circle_samples`: number of samples on image circle
 - `backmap_order`: 1 (first-order) or 2 (rigorous second-order via p'')
 - `use_tight_bridge`: use `poly_bridge_constant_powers_from_coeffs` for tighter bound
+- `use_ordschur`: (default `true`) use ordered Schur decomposition to project away
+  certified eigenvalues, certifying only the smaller `p(T₂₂)` block. This avoids
+  ill-conditioning when the full `p(T)` has eigenvalues spanning many orders of magnitude.
+  The block triangular bound (Weyl's inequality) is:
+  `σ_min(zI-p(T)) ≥ min(σ_min(zI-p(T₁₁)), σ_min(zI-p(T₂₂))) - ‖B_off‖`.
 - `schur_data_bf`: pre-computed BigFloat Schur data (5-tuple from `compute_schur_and_error`);
   if `nothing`, computed from `A_f64` promoted to BigFloat
 
@@ -917,6 +991,7 @@ function certify_eigenvalue_deflation_bigfloat(A_f64::BallMatrix, lambda_tgt::Nu
                                                 image_circle_samples::Int=256,
                                                 backmap_order::Int=2,
                                                 use_tight_bridge::Bool=true,
+                                                use_ordschur::Bool=true,
                                                 schur_data_bf=nothing)
     t0 = time()
     λ_tgt = ComplexF64(lambda_tgt)
@@ -937,37 +1012,102 @@ function certify_eigenvalue_deflation_bigfloat(A_f64::BallMatrix, lambda_tgt::Nu
     bf_coeffs = deflation_polynomial(bf_zeros, BigFloat(real(λ_tgt)); q=q)
     poly_degree = length(bf_coeffs) - 1
 
-    # Step 4: Evaluate p(T) in BigFloat via Horner
-    bT_bf = BallMatrix(S_bf.T)
-    pT_bf = BallArithmetic.CertifScripts._polynomial_matrix(bf_coeffs, bT_bf)
+    # Step 4–6: Evaluate p(T) and certify σ_min on image circle
+    if use_ordschur && !isempty(certified_indices)
+        # === ordschur path: project away certified eigenvalues ===
+        # Move certified eigenvalues to top-left block of Schur form.
+        # After ordschur: T_ord = [T₁₁ T₁₂; 0 T₂₂] with σ(T₁₁) = certified eigs.
+        # p(T_ord) = [p(T₁₁) B_off; 0 p(T₂₂)] with p(T₁₁) ≈ 0 (zeros match eigs).
+        # Weyl bound: σ_min(zI-p(T)) ≥ min(σ_min(zI-p(T₁₁)), σ_min(zI-p(T₂₂))) - ‖B_off‖.
+        schur_cert_indices = sorted_idx[certified_indices]
+        # Q_ord not needed: Givens rotations are unitary, so ‖Q_ord‖ = ‖Q‖.
+        # The Schur bridge uses original norm_Z, norm_Z_inv.
+        T_ord, _, k_block = _bigfloat_ordschur_block(
+            S_bf.T, S_bf.Z, schur_cert_indices)
 
-    # Step 5: Convert p(T) to Float64 BallMatrix (radii capture conversion error)
-    pT_f64 = bigfloat_ball_to_float64_ball(pT_bf)
+        # Evaluate p(T_ord) in BigFloat via Horner on full reordered T
+        bT_ord = BallMatrix(T_ord)
+        pT_ord_bf = BallArithmetic.CertifScripts._polynomial_matrix(bf_coeffs, bT_ord)
 
-    # Step 6: Certify σ_min(pT - zI) on circle around z=1
-    max_resolvent_pT = 0.0
-    for k in 0:(image_circle_samples - 1)
-        θ = 2π * k / image_circle_samples
-        z = ComplexF64(1.0 + image_circle_radius * cos(θ),
-                       image_circle_radius * sin(θ))
+        # Extract blocks
+        n_full = size(T_ord, 1)
+        pT22_center = BallArithmetic.mid(pT_ord_bf)[k_block+1:end, k_block+1:end]
+        pT22_radius = BallArithmetic.rad(pT_ord_bf)[k_block+1:end, k_block+1:end]
+        pT22_bf = BallMatrix(pT22_center, pT22_radius)
 
-        sigma_vals = svdbox(pT_f64 - z * I)
-        sigma_min_ball = sigma_vals[end]
+        # ‖B_off‖ via Frobenius norm (upper bound on operator norm)
+        Boff_abs = abs.(BallArithmetic.mid(pT_ord_bf)[1:k_block, k_block+1:end]) .+
+                   BallArithmetic.rad(pT_ord_bf)[1:k_block, k_block+1:end]
+        Boff_norm = _bigfloat_to_float64_upper(sqrt(sum(Boff_abs .^ 2)))
 
-        # Rigorous lower bound on σ_min
-        sigma_lower = Float64(BallArithmetic.mid(sigma_min_ball)) -
-                      Float64(BallArithmetic.rad(sigma_min_ball))
-        sigma_lower = max(sigma_lower, 0.0)
-        if sigma_lower <= 0
-            @warn "σ_min ≤ 0 at sample k=$k (z=$z); certification will fail"
-            max_resolvent_pT = Inf
-            break
+        # ‖p(T₁₁)‖ via Frobenius (should be ~0 since polynomial zeros = eigenvalues)
+        pT11_abs = abs.(BallArithmetic.mid(pT_ord_bf)[1:k_block, 1:k_block]) .+
+                   BallArithmetic.rad(pT_ord_bf)[1:k_block, 1:k_block]
+        pT11_norm = _bigfloat_to_float64_upper(sqrt(sum(pT11_abs .^ 2)))
+
+        @info "ordschur block structure" k_block m_block=n_full-k_block Boff_norm pT11_norm
+
+        # Convert p(T₂₂) to Float64 BallMatrix for svdbox certification
+        pT22_f64 = bigfloat_ball_to_float64_ball(pT22_bf)
+
+        # Certify σ_min on image circle using block triangular bound
+        max_resolvent_pT = 0.0
+        for s in 0:(image_circle_samples - 1)
+            θ = 2π * s / image_circle_samples
+            z = ComplexF64(1.0 + image_circle_radius * cos(θ),
+                           image_circle_radius * sin(θ))
+
+            # σ_min(zI - p(T₂₂)) via svdbox on smaller (n-k)×(n-k) matrix
+            sigma_vals = svdbox(pT22_f64 - z * I)
+            sigma_min_22 = max(Float64(BallArithmetic.mid(sigma_vals[end])) -
+                               Float64(BallArithmetic.rad(sigma_vals[end])), 0.0)
+
+            # σ_min(zI - p(T₁₁)) ≥ |z| - ‖p(T₁₁)‖  (Weyl)
+            sigma_min_11 = abs(z) - pT11_norm
+
+            # Block bound (Weyl): σ_min(full) ≥ min(σ_min_11, σ_min_22) - ‖B_off‖
+            sigma_min_full = min(sigma_min_11, sigma_min_22) - Boff_norm
+
+            if sigma_min_full <= 0
+                @warn "Block σ_min ≤ 0 at sample s=$s" sigma_min_11 sigma_min_22 Boff_norm
+                max_resolvent_pT = Inf
+                break
+            end
+
+            resolvent_z = setrounding(Float64, RoundUp) do
+                1.0 / sigma_min_full
+            end
+            max_resolvent_pT = max(max_resolvent_pT, resolvent_z)
         end
+        method = :bigfloat_deflation_ordschur
+    else
+        # === Original path: full p(T) ===
+        bT_bf = BallMatrix(S_bf.T)
+        pT_bf = BallArithmetic.CertifScripts._polynomial_matrix(bf_coeffs, bT_bf)
+        pT_f64 = bigfloat_ball_to_float64_ball(pT_bf)
 
-        resolvent_z = setrounding(Float64, RoundUp) do
-            1.0 / sigma_lower
+        max_resolvent_pT = 0.0
+        for s in 0:(image_circle_samples - 1)
+            θ = 2π * s / image_circle_samples
+            z = ComplexF64(1.0 + image_circle_radius * cos(θ),
+                           image_circle_radius * sin(θ))
+
+            sigma_vals = svdbox(pT_f64 - z * I)
+            sigma_min_ball = sigma_vals[end]
+            sigma_lower = max(Float64(BallArithmetic.mid(sigma_min_ball)) -
+                              Float64(BallArithmetic.rad(sigma_min_ball)), 0.0)
+            if sigma_lower <= 0
+                @warn "σ_min ≤ 0 at sample s=$s (z=$z); certification will fail"
+                max_resolvent_pT = Inf
+                break
+            end
+
+            resolvent_z = setrounding(Float64, RoundUp) do
+                1.0 / sigma_lower
+            end
+            max_resolvent_pT = max(max_resolvent_pT, resolvent_z)
         end
-        max_resolvent_pT = max(max_resolvent_pT, resolvent_z)
+        method = :bigfloat_deflation
     end
 
     # Step 7: Schur bridge — M_r from ‖(zI - p(A_k))⁻¹‖
@@ -1028,7 +1168,7 @@ function certify_eigenvalue_deflation_bigfloat(A_f64::BallMatrix, lambda_tgt::Nu
         Float64(image_circle_radius), image_certified_radius,
         eps_p, bridge_const, resolvent_Mr, α, Float64(dp_abs),
         is_certified, ε_K, K + 1, Float64(r),
-        :bigfloat_deflation, timing
+        method, timing
     )
 end
 
