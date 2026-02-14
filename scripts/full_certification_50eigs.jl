@@ -497,13 +497,38 @@ else
     else
         r11_tail = setrounding(Float64, RoundUp) do; 1.0 / sig11_on_circle; end
 
-        # T22 via CertifScripts
-        @info "CertifScripts certification of T22 on tail circle..."
+        # T22 via CertifScripts (with svdbox fallback)
+        @info "Certifying T22 resolvent on tail circle..."
         T22_tail_f64 = bigfloat_ball_to_float64_ball(BallMatrix(T22_tail_bf))
         circle_tail = CertificationCircle(ComplexF64(0.0), rho_tail; samples=CIRCLE_SAMPLES)
         t0 = time()
-        cert_T22_tail = run_certification(T22_tail_f64, circle_tail; log_io=devnull)
-        max_res_T22_tail = cert_T22_tail.resolvent_original
+        max_res_T22_tail = try
+            cert_T22_tail = run_certification(T22_tail_f64, circle_tail; log_io=devnull)
+            @info "  T22: CertifScripts succeeded"
+            cert_T22_tail.resolvent_original
+        catch e
+            @warn "  T22: CertifScripts failed, using manual svdbox scan" exception=(e,)
+            d_max = setrounding(Float64, RoundUp) do
+                2.0 * rho_tail * sin(π / (2 * CIRCLE_SAMPLES))
+            end
+            max_r = 0.0
+            for s_idx in 0:(CIRCLE_SAMPLES - 1)
+                θ = 2π * s_idx / CIRCLE_SAMPLES
+                z = ComplexF64(rho_tail * cos(θ), rho_tail * sin(θ))
+                sv = svdbox(T22_tail_f64 - z * I)
+                σ_ball = sv[end]
+                σ_at_sample = max(Float64(BallArithmetic.mid(σ_ball)) -
+                                  Float64(BallArithmetic.rad(σ_ball)), 0.0)
+                σ_lower = σ_at_sample - d_max
+                if σ_lower <= 0
+                    @error "σ_min(zI-T22) ≤ 0 at tail circle sample s=$s_idx" σ_at_sample d_max
+                    max_r = Inf; break
+                end
+                r22 = setrounding(Float64, RoundUp) do; 1.0 / σ_lower; end
+                max_r = max(max_r, r22)
+            end
+            max_r
+        end
         @printf("  T22 resolvent <= %.6e  [%.1fs]\n", max_res_T22_tail, time()-t0)
 
         # Block formula
