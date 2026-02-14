@@ -43,6 +43,7 @@ export newton_kantorovich_error
 export certify_eigenvalue_lift, verify_spectral_gap
 export DeflationCertificationResult, certify_eigenvalue_deflation, backmap_inclusion_radius
 export certify_eigenvalue_deflation_bigfloat
+export OrdschurDirectResult, certify_eigenvalue_ordschur_direct
 export deflation_truncation_error
 export TwoStageCertificationResult, reverse_transfer_resolvent_bound
 export projector_approximation_error_rigorous
@@ -1188,6 +1189,241 @@ function certify_eigenvalue_deflation_bigfloat(A_f64::BallMatrix, lambda_tgt::Nu
         eps_p, bridge_const, resolvent_Mr, α, Float64(dp_abs),
         is_certified, ε_K, K + 1, Float64(r),
         method, timing
+    )
+end
+
+# ============================================================================
+# Direct Ordschur Resolvent Certification (no polynomial)
+# ============================================================================
+
+"""
+    OrdschurDirectResult
+
+Result of direct resolvent certification using block Schur structure.
+
+The block triangular inversion formula gives a rigorous resolvent bound:
+
+    (zI - T)⁻¹ = [(zI-T₁₁)⁻¹    (zI-T₁₁)⁻¹ T₁₂ (zI-T₂₂)⁻¹]
+                  [0               (zI-T₂₂)⁻¹                  ]
+
+So ‖(zI-T)⁻¹‖₂ ≤ 1/σ₁₁ · (1 + ‖T₁₂‖/σ₂₂) + 1/σ₂₂
+
+where σ₁₁ = σ_min(zI-T₁₁), σ₂₂ = σ_min(zI-T₂₂).
+"""
+struct OrdschurDirectResult
+    eigenvalue_center::ComplexF64
+    eigenvalue_radius::Float64
+    eigenvalue_ball::Ball{Float64, ComplexF64}
+    circle_radius::Float64
+    circle_samples::Int
+    resolvent_Mr::Float64            # max ‖(zI-A_K)⁻¹‖ on circle
+    max_resolvent_T11::Float64       # max 1/σ_min(zI-T₁₁)
+    max_resolvent_T22::Float64       # max 1/σ_min(zI-T₂₂)
+    T12_norm::Float64                # ‖T₁₂‖_F
+    small_gain_factor::Float64       # α = ε_K · M_r
+    is_certified::Bool
+    truncation_error::Float64        # ε_K
+    discretization_size::Int         # K+1
+    hardy_space_radius::Float64
+    ordschur_block_size::Int         # k (size of T₁₁)
+    certification_method::Symbol     # :ordschur_direct
+    timing::Float64
+end
+
+function Base.show(io::IO, r::OrdschurDirectResult)
+    println(io, "Ordschur Direct Certification Result")
+    println(io, "====================================")
+    println(io, "Eigenvalue: $(r.eigenvalue_center) ± $(r.eigenvalue_radius)")
+    println(io, "Certified: $(r.is_certified)")
+    println(io, "Method: $(r.certification_method)")
+    println(io, "")
+    println(io, "Circle radius: $(r.circle_radius)")
+    println(io, "Circle samples: $(r.circle_samples)")
+    println(io, "Max resolvent T₁₁: $(r.max_resolvent_T11)")
+    println(io, "Max resolvent T₂₂: $(r.max_resolvent_T22)")
+    println(io, "‖T₁₂‖_F: $(r.T12_norm)")
+    println(io, "Resolvent M_r: $(r.resolvent_Mr)")
+    println(io, "Small-gain α: $(r.small_gain_factor)")
+    println(io, "ε_K: $(r.truncation_error)")
+    println(io, "ordschur block: $(r.ordschur_block_size) / $(r.discretization_size)")
+    println(io, "Timing: $(round(r.timing, digits=2))s")
+end
+
+"""
+    certify_eigenvalue_ordschur_direct(A_f64::BallMatrix, lambda_tgt::Number,
+                                       ordschur_indices::AbstractVector{<:Integer};
+                                       K::Int, r::Real=1.0, N::Int=5000,
+                                       circle_radius::Real=0.0,
+                                       circle_samples::Int=256,
+                                       schur_data_bf=nothing)
+
+Certify an eigenvalue via direct resolvent bound using block Schur structure.
+
+Unlike polynomial deflation, this works in the ORIGINAL λ-space. No polynomial,
+no rescaling, no back-mapping. The circle is directly around `lambda_tgt`.
+
+# Why this works
+After ordschur, T = [T₁₁ T₁₂; 0 T₂₂] where T₁₁ contains the large eigenvalues
+(already certified) and T₂₂ contains small eigenvalues including the target.
+Both blocks are well-conditioned for svdbox:
+- T₁₁ entries O(1), σ_min(zI-T₁₁) ≥ |λ_tgt| (distance from z≈λ_tgt to T₁₁ spectrum)
+- T₂₂ entries O(|λ_{k+1}|), σ_min(zI-T₂₂) controlled by eigenvalue separation
+
+The block triangular resolvent formula gives a rigorous bound WITHOUT needing
+to invert or factorize the full matrix.
+
+# Arguments
+- `A_f64`: Float64 GKW discretization matrix as BallMatrix
+- `lambda_tgt`: target eigenvalue to certify
+- `ordschur_indices`: indices (in magnitude-sorted order) of eigenvalues to move to T₁₁
+  (should include all eigenvalues larger than `lambda_tgt`)
+- `K`: discretization order (matrix is (K+1)×(K+1))
+- `r`: Hardy space radius (default 1.0)
+- `N`: splitting parameter for C₂ computation
+- `circle_radius`: radius of certification circle around `lambda_tgt`;
+  if 0 (default), auto-set to half the distance to nearest eigenvalue
+- `circle_samples`: number of samples on circle
+- `schur_data_bf`: pre-computed BigFloat Schur data (5-tuple from `compute_schur_and_error`);
+  if `nothing`, computed from `A_f64`
+
+# Returns
+[`OrdschurDirectResult`](@ref)
+"""
+function certify_eigenvalue_ordschur_direct(A_f64::BallMatrix, lambda_tgt::Number,
+                                            ordschur_indices::AbstractVector{<:Integer};
+                                            K::Int, r::Real=1.0, N::Int=5000,
+                                            circle_radius::Real=0.0,
+                                            circle_samples::Int=256,
+                                            schur_data_bf=nothing)
+    t0 = time()
+    λ_tgt = ComplexF64(lambda_tgt)
+
+    # Step 1: BigFloat Schur decomposition
+    if schur_data_bf === nothing
+        A_bf = float64_ball_to_bigfloat_ball(A_f64)
+        schur_data_bf = compute_schur_and_error(A_bf)
+    end
+    S_bf, _, _, norm_Z_bf, norm_Z_inv_bf = schur_data_bf
+
+    # Sort eigenvalues by magnitude
+    T_bf_diag = diag(S_bf.T)
+    sorted_idx = sortperm(abs.(T_bf_diag), rev=true)
+    sorted_eigs = T_bf_diag[sorted_idx]
+
+    # Step 2: ordschur — move large eigenvalues to T₁₁
+    schur_ords_indices = sorted_idx[ordschur_indices]
+    T_ord, _, k_block = _bigfloat_ordschur_block(S_bf.T, S_bf.Z, schur_ords_indices)
+
+    n_full = size(T_ord, 1)
+    m_block = n_full - k_block  # size of T₂₂
+
+    # Step 3: Extract blocks and convert to Float64 BallMatrix
+    # T₁₁ (k×k), T₁₂ (k×m), T₂₂ (m×m)
+    T11_bf = T_ord[1:k_block, 1:k_block]
+    T12_bf = T_ord[1:k_block, k_block+1:end]
+    T22_bf = T_ord[k_block+1:end, k_block+1:end]
+
+    T11_f64 = bigfloat_ball_to_float64_ball(BallMatrix(T11_bf))
+    T12_f64 = bigfloat_ball_to_float64_ball(BallMatrix(T12_bf))
+    T22_f64 = bigfloat_ball_to_float64_ball(BallMatrix(T22_bf))
+
+    # ‖T₁₂‖_F (rigorous upper bound)
+    T12_abs = abs.(BallArithmetic.mid(T12_f64)) .+ BallArithmetic.rad(T12_f64)
+    T12_norm = setrounding(Float64, RoundUp) do
+        sqrt(sum(T12_abs .^ 2))
+    end
+
+    @info "ordschur direct" k_block m_block T12_norm
+
+    # Step 4: Auto-set circle radius if needed
+    # Find nearest eigenvalue to λ_tgt (excluding itself)
+    if circle_radius <= 0
+        # Find target in sorted list
+        tgt_idx_in_sorted = findfirst(i -> abs(Float64(real(sorted_eigs[i])) - real(λ_tgt)) < 1e-30, 1:n_full)
+        min_dist = Inf
+        for i in 1:n_full
+            i == tgt_idx_in_sorted && continue
+            d = abs(ComplexF64(sorted_eigs[i]) - λ_tgt)
+            min_dist = min(min_dist, d)
+        end
+        circle_radius = min_dist / 2.0
+        @info "auto circle radius" min_dist circle_radius
+    end
+    circle_radius_f64 = Float64(circle_radius)
+
+    # Step 5: Certify resolvent on circle around λ_tgt
+    norm_Z_f64 = _ball_to_float64_upper(norm_Z_bf)
+    norm_Z_inv_f64 = _ball_to_float64_upper(norm_Z_inv_bf)
+
+    max_res_T11 = 0.0
+    max_res_T22 = 0.0
+    max_resolvent = 0.0
+
+    for s in 0:(circle_samples - 1)
+        θ = 2π * s / circle_samples
+        z = ComplexF64(real(λ_tgt) + circle_radius_f64 * cos(θ),
+                       imag(λ_tgt) + circle_radius_f64 * sin(θ))
+
+        # σ_min(zI - T₁₁)
+        sv11 = svdbox(T11_f64 - z * I)
+        σ11_ball = sv11[end]
+        σ11_lower = max(Float64(BallArithmetic.mid(σ11_ball)) -
+                        Float64(BallArithmetic.rad(σ11_ball)), 0.0)
+
+        # σ_min(zI - T₂₂)
+        sv22 = svdbox(T22_f64 - z * I)
+        σ22_ball = sv22[end]
+        σ22_lower = max(Float64(BallArithmetic.mid(σ22_ball)) -
+                        Float64(BallArithmetic.rad(σ22_ball)), 0.0)
+
+        if σ11_lower <= 0 || σ22_lower <= 0
+            @warn "σ_min ≤ 0 at sample s=$s" σ11_lower σ22_lower
+            max_resolvent = Inf
+            break
+        end
+
+        # Block formula: ‖(zI-T)⁻¹‖ ≤ 1/σ₁₁ · (1 + ‖T₁₂‖/σ₂₂) + 1/σ₂₂
+        res_z = setrounding(Float64, RoundUp) do
+            inv_σ11 = 1.0 / σ11_lower
+            inv_σ22 = 1.0 / σ22_lower
+            inv_σ11 * (1.0 + T12_norm * inv_σ22) + inv_σ22
+        end
+
+        r11 = setrounding(Float64, RoundUp) do
+            1.0 / σ11_lower
+        end
+        r22 = setrounding(Float64, RoundUp) do
+            1.0 / σ22_lower
+        end
+
+        max_res_T11 = max(max_res_T11, r11)
+        max_res_T22 = max(max_res_T22, r22)
+        max_resolvent = max(max_resolvent, res_z)
+    end
+
+    # Step 6: Schur similarity bridge
+    resolvent_Mr = setrounding(Float64, RoundUp) do
+        norm_Z_f64 * max_resolvent * norm_Z_inv_f64
+    end
+
+    # Step 7: Small-gain check
+    ε_K = Float64(real(compute_Δ(K; N=N)))
+    α = setrounding(Float64, RoundUp) do
+        ε_K * resolvent_Mr
+    end
+    is_certified = α < 1.0
+
+    # Eigenvalue radius = circle radius (direct, no backmap needed)
+    λ_radius = is_certified ? circle_radius_f64 : Inf
+
+    timing = time() - t0
+
+    return OrdschurDirectResult(
+        λ_tgt, λ_radius, Ball(λ_tgt, λ_radius),
+        circle_radius_f64, circle_samples,
+        resolvent_Mr, max_res_T11, max_res_T22, T12_norm,
+        α, is_certified, ε_K, K + 1, Float64(r),
+        k_block, :ordschur_direct, timing
     )
 end
 

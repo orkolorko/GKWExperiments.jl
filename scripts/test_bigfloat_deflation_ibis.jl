@@ -1,21 +1,24 @@
 #!/usr/bin/env julia
 """
-Test ordschur + linear rescaling certification at K=256 on ibis.
+Test ordschur + direct resolvent certification at K=256 on ibis.
 
-After ordschur projects eigenvalues 1-20 to T₁₁, T₂₂ only contains small
-eigenvalues. We certify using p(z) = z/λ_tgt (linear rescaling to map target
-to 1), with NO deflation zeros. This gives:
-  - bridge constant C_r ~ 1/|λ_tgt| (minimal)
-  - eps_p = ε_K · C_r ~ ε_K / |λ_tgt| ~ 10⁻³⁵ (tiny)
-  - M_r bounded by eigenvalue separation in T₂₂/λ_tgt
+After ordschur projects eigenvalues 1-20 to T₁₁, we certify the resolvent
+DIRECTLY in the original λ-space (no polynomial, no rescaling).
 
-Much simpler and more robust than polynomial deflation with multiple zeros.
+Block triangular inversion formula:
+  (zI-T)⁻¹ = [(zI-T₁₁)⁻¹    (zI-T₁₁)⁻¹ T₁₂ (zI-T₂₂)⁻¹]
+              [0               (zI-T₂₂)⁻¹                  ]
+
+  ‖(zI-T)⁻¹‖ ≤ 1/σ₁₁ · (1 + ‖T₁₂‖/σ₂₂) + 1/σ₂₂
+
+T₁₁ and T₂₂ are well-conditioned separately, so svdbox works.
 """
 
 using GKWExperiments, BallArithmetic, ArbNumerics, LinearAlgebra, Serialization, Dates
+using BallArithmetic.CertifScripts: compute_schur_and_error
 
 println("=" ^ 70)
-println("Ordschur + Linear Rescaling Certification — K=256")
+println("Ordschur + Direct Resolvent Certification — K=256")
 println("=" ^ 70)
 println("Started: ", Dates.now())
 flush(stdout)
@@ -37,6 +40,7 @@ sorted_idx = sortperm(abs.(eigs), rev=true)
 sorted_eigs = eigs[sorted_idx]
 println("  Top 5 eigenvalues: ", round.(real.(sorted_eigs[1:5]), sigdigits=8))
 println("  Eigenvalue 20: ", real(sorted_eigs[20]))
+println("  Eigenvalue 21: ", real(sorted_eigs[21]))
 println("  Eigenvalue 30: ", real(sorted_eigs[30]))
 println("  Eigenvalue 50: ", real(sorted_eigs[50]))
 flush(stdout)
@@ -67,8 +71,9 @@ const CERTIFIED_RANGE = 1:20  # already certified → move to T₁₁ via ordsch
 const TEST_RANGE = 21:50      # targets for certification
 
 println("\n" * "=" ^ 70)
-println("Certifying eigenvalues $TEST_RANGE via ordschur + linear rescaling")
-println("ordschur projects eigenvalues 1-20 to T₁₁, polynomial p(z) = z/λ_tgt")
+println("Certifying eigenvalues $TEST_RANGE via ordschur + direct resolvent")
+println("ordschur projects eigenvalues 1-20 to T₁₁")
+println("Block formula: ‖(zI-T)⁻¹‖ ≤ 1/σ₁₁·(1 + ‖T₁₂‖/σ₂₂) + 1/σ₂₂")
 println("=" ^ 70)
 flush(stdout)
 
@@ -83,14 +88,10 @@ for j in TEST_RANGE
     flush(stdout)
 
     t_cert = @elapsed begin
-        result = certify_eigenvalue_deflation_bigfloat(
-            A_ball, λ_tgt, Int[];  # no deflation zeros → p(z) = z/λ_tgt
+        result = certify_eigenvalue_ordschur_direct(
+            A_ball, λ_tgt, ordschur_set;
             K=K, schur_data_bf=sd_bf,
-            image_circle_radius=0.3,
-            image_circle_samples=256,
-            backmap_order=2,
-            use_ordschur=true,
-            ordschur_indices=ordschur_set)
+            circle_samples=256)
     end
 
     results[j] = result
@@ -98,9 +99,12 @@ for j in TEST_RANGE
     println("  certified = ", result.is_certified)
     println("  small_gain α = ", result.small_gain_factor)
     println("  resolvent_Mr = ", result.resolvent_Mr)
-    println("  bridge_const = ", result.bridge_constant)
-    println("  eps_p = ", result.poly_perturbation_bound)
+    println("  max_res_T11 = ", result.max_resolvent_T11)
+    println("  max_res_T22 = ", result.max_resolvent_T22)
+    println("  T12_norm = ", result.T12_norm)
+    println("  circle_radius = ", result.circle_radius)
     println("  lambda_radius = ", result.eigenvalue_radius)
+    println("  eps_K = ", result.truncation_error)
     println("  timing = ", round(t_cert, digits=2), "s")
     flush(stdout)
 
