@@ -1323,7 +1323,8 @@ function certify_eigenvalue_ordschur_direct(A_f64::BallMatrix, lambda_tgt::Numbe
     T12_bf = T_ord[1:k_block, k_block+1:end]
     T22_bf = T_ord[k_block+1:end, k_block+1:end]
 
-    # Only convert T₁₂ and T₂₂ to Float64; T₁₁ stays BigFloat for inverse norm
+    # T₁₁ stays BigFloat for svdbox (small matrix, high precision needed).
+    # T₂₂ converts to Float64 BallMatrix for fast svdbox (small entries, well-conditioned).
     T22_f64 = bigfloat_ball_to_float64_ball(BallMatrix(T22_bf))
 
     # ‖T₁₂‖_F (rigorous upper bound via BigFloat → Float64)
@@ -1351,53 +1352,69 @@ function certify_eigenvalue_ordschur_direct(A_f64::BallMatrix, lambda_tgt::Numbe
     circle_radius_f64 = Float64(circle_radius)
 
     # Step 5: Certify resolvent on circle around λ_tgt
-    # T₁₁ is upper triangular with large eigenvalues → use BigFloat triangular
-    # inverse norm bound (svdbox fails in Float64 when condition number > 10¹⁶).
-    # T₂₂ has small entries → svdbox in Float64 works fine.
     norm_Z_f64 = _ball_to_float64_upper(norm_Z_bf)
     norm_Z_inv_f64 = _ball_to_float64_upper(norm_Z_inv_bf)
 
-    max_res_T11 = 0.0
-    max_res_T22 = 0.0
-    max_resolvent = 0.0
+    # T₁₁: compute σ_min once at circle center via BigFloat svdbox, then propagate.
+    # Since all T₁₁ eigenvalues are far from λ_tgt (distance ≫ circle_radius),
+    # Weyl's perturbation gives: σ_min(zI-T₁₁) ≥ σ_min(z₀I-T₁₁) - |z-z₀|
+    # where z₀ = λ_tgt and |z-z₀| = circle_radius on the circle.
+    z0_bf = Complex{BigFloat}(λ_tgt_bf, zero(BigFloat))
+    zI_T11_center = z0_bf * I - Complex{BigFloat}.(T11_bf)
+    sv11_center = svdbox(BallMatrix(zI_T11_center))
+    σ11_center_ball = sv11_center[end]
+    σ11_center_lower_bf = BallArithmetic.mid(σ11_center_ball) - BallArithmetic.rad(σ11_center_ball)
+    σ11_center_lower = max(Float64(σ11_center_lower_bf), 0.0)
 
-    for s in 0:(circle_samples - 1)
-        θ = 2π * s / circle_samples
-        z_bf = Complex{BigFloat}(λ_tgt_bf + BigFloat(circle_radius_f64) * cos(BigFloat(θ)),
-                                  BigFloat(circle_radius_f64) * sin(BigFloat(θ)))
-        z_f64 = ComplexF64(z_bf)
+    # Propagate to circle: σ_min(zI-T₁₁) ≥ σ_min(z₀I-T₁₁) - ρ
+    σ11_on_circle = σ11_center_lower - circle_radius_f64
+    @info "T₁₁ svdbox" σ11_center_lower σ11_on_circle circle_radius_f64
 
-        # ‖(zI - T₁₁)⁻¹‖₂ via triangular backward recursion in BigFloat
-        # T₁₁ is upper triangular → zI - T₁₁ is upper triangular
-        zI_T11 = z_bf * I - T11_bf
-        inv_norm_11 = BallArithmetic.triangular_inverse_two_norm_bound(zI_T11)
-        r11 = _bigfloat_to_float64_upper(inv_norm_11)
-
-        # σ_min(zI - T₂₂) via svdbox (T₂₂ has small entries, well-conditioned)
-        sv22 = svdbox(T22_f64 - z_f64 * I)
-        σ22_ball = sv22[end]
-        σ22_lower = max(Float64(BallArithmetic.mid(σ22_ball)) -
-                        Float64(BallArithmetic.rad(σ22_ball)), 0.0)
-
-        if !isfinite(r11) || σ22_lower <= 0
-            @warn "resolvent bound failed at sample s=$s" r11 σ22_lower
-            max_resolvent = Inf
-            break
+    if σ11_on_circle <= 0
+        @warn "σ_min(zI-T₁₁) bound ≤ 0: eigenvalue too close to T₁₁ spectrum" σ11_center_lower circle_radius_f64
+        max_resolvent = Inf
+        max_res_T11 = Inf
+        max_res_T22 = 0.0
+    else
+        # 1/σ₁₁ is constant (upper bound) across the circle
+        r11 = setrounding(Float64, RoundUp) do
+            1.0 / σ11_on_circle
         end
+        max_res_T11 = r11
 
-        # Block formula: ‖(zI-T)⁻¹‖ ≤ ‖(zI-T₁₁)⁻¹‖·(1 + ‖T₁₂‖/σ₂₂) + 1/σ₂₂
-        res_z = setrounding(Float64, RoundUp) do
-            inv_σ22 = 1.0 / σ22_lower
-            r11 * (1.0 + T12_norm * inv_σ22) + inv_σ22
+        # T₂₂: scan circle with Float64 svdbox (small entries, well-conditioned)
+        max_res_T22 = 0.0
+        max_resolvent = 0.0
+
+        for s in 0:(circle_samples - 1)
+            θ = 2π * s / circle_samples
+            z_f64 = ComplexF64(real(λ_tgt) + circle_radius_f64 * cos(θ),
+                               imag(λ_tgt) + circle_radius_f64 * sin(θ))
+
+            sv22 = svdbox(T22_f64 - z_f64 * I)
+            σ22_ball = sv22[end]
+            σ22_lower = max(Float64(BallArithmetic.mid(σ22_ball)) -
+                            Float64(BallArithmetic.rad(σ22_ball)), 0.0)
+
+            if σ22_lower <= 0
+                @warn "σ_min(zI-T₂₂) ≤ 0 at sample s=$s" σ22_lower
+                max_resolvent = Inf
+                break
+            end
+
+            # Block formula: ‖(zI-T)⁻¹‖ ≤ 1/σ₁₁·(1 + ‖T₁₂‖/σ₂₂) + 1/σ₂₂
+            res_z = setrounding(Float64, RoundUp) do
+                inv_σ22 = 1.0 / σ22_lower
+                r11 * (1.0 + T12_norm * inv_σ22) + inv_σ22
+            end
+
+            r22 = setrounding(Float64, RoundUp) do
+                1.0 / σ22_lower
+            end
+
+            max_res_T22 = max(max_res_T22, r22)
+            max_resolvent = max(max_resolvent, res_z)
         end
-
-        r22 = setrounding(Float64, RoundUp) do
-            1.0 / σ22_lower
-        end
-
-        max_res_T11 = max(max_res_T11, r11)
-        max_res_T22 = max(max_res_T22, r22)
-        max_resolvent = max(max_resolvent, res_z)
     end
 
     # Step 6: Schur similarity bridge
