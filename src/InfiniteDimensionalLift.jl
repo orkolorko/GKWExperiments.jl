@@ -43,7 +43,7 @@ export newton_kantorovich_error
 export certify_eigenvalue_lift, verify_spectral_gap
 export DeflationCertificationResult, certify_eigenvalue_deflation, backmap_inclusion_radius
 export certify_eigenvalue_deflation_bigfloat
-export OrdschurDirectResult, certify_eigenvalue_ordschur_direct
+export OrdschurDirectResult, certify_eigenvalue_ordschur_direct, certify_eigenvalue_schur_direct
 export deflation_truncation_error
 export TwoStageCertificationResult, reverse_transfer_resolvent_bound
 export projector_approximation_error_rigorous
@@ -1450,6 +1450,223 @@ function certify_eigenvalue_ordschur_direct(A_f64::BallMatrix, lambda_tgt::Numbe
         resolvent_Mr, max_res_T11, max_res_T22, T12_norm,
         α, is_certified, ε_K, K + 1, Float64(r),
         k_block, :ordschur_direct, timing
+    )
+end
+
+"""
+    certify_eigenvalue_schur_direct(A_f64::BallMatrix, schur_position::Int;
+                                    K::Int, r::Real=1.0, N::Int=5000,
+                                    circle_radius::Real=0.0,
+                                    circle_samples::Int=256,
+                                    schur_data_bf=nothing)
+
+Certify an eigenvalue via direct resolvent bound using the **natural Schur order**.
+
+This is the rigorous version of `certify_eigenvalue_ordschur_direct`: it avoids ordschur
+entirely, using the fact that GenericSchur.jl sorts eigenvalues by magnitude on the
+diagonal (position 1 = largest). The block split at position `p = schur_position` gives:
+- T₁₁ = T[1:p-1, 1:p-1]  (large eigenvalues, well-separated from target)
+- T₁₂ = T[1:p-1, p:end]   (coupling block)
+- T₂₂ = T[p:end, p:end]   (target + smaller eigenvalues)
+
+Since no ordschur is performed, the Schur error bounds (‖Q‖, ‖Q⁻¹‖, ‖E‖) from
+`compute_schur_and_error` apply directly — no untracked Givens rotation rounding.
+
+The resolvent bound on the certification circle uses:
+1. BigFloat SVD (GenericLinearAlgebra) for σ_min(z₀I-T₁₁) at circle center
+2. Weyl propagation: σ_min(zI-T₁₁) ≥ σ_min(z₀I-T₁₁) - ρ  for all z on circle
+3. Float64 svdbox for σ_min(zI-T₂₂) at each sample point
+4. Block triangular formula: ‖(zI-T)⁻¹‖ ≤ 1/σ₁₁·(1+‖T₁₂‖/σ₂₂) + 1/σ₂₂
+
+# Arguments
+- `A_f64`: Float64 GKW discretization matrix as BallMatrix
+- `schur_position`: position of target eigenvalue on Schur diagonal (1-indexed).
+  The eigenvalue at `diag(T)[schur_position]` is the target; positions 1:p-1 form T₁₁.
+- `K`: discretization order (matrix is (K+1)×(K+1))
+- `r`: Hardy space radius (default 1.0)
+- `N`: splitting parameter for ε_K computation
+- `circle_radius`: certification circle radius around the target eigenvalue;
+  if 0, auto-set to half the distance to nearest eigenvalue
+- `circle_samples`: number of sample points on circle
+- `schur_data_bf`: pre-computed BigFloat Schur data (5-tuple from `compute_schur_and_error`)
+
+# Returns
+[`OrdschurDirectResult`](@ref) with `certification_method = :schur_direct`
+"""
+function certify_eigenvalue_schur_direct(A_f64::BallMatrix, schur_position::Int;
+                                          K::Int, r::Real=1.0, N::Int=5000,
+                                          circle_radius::Real=0.0,
+                                          circle_samples::Int=256,
+                                          schur_data_bf=nothing)
+    t0 = time()
+
+    # Step 1: BigFloat Schur decomposition
+    if schur_data_bf === nothing
+        A_bf = float64_ball_to_bigfloat_ball(A_f64)
+        schur_data_bf = compute_schur_and_error(A_bf)
+    end
+    S_bf, _, _, norm_Z_bf, norm_Z_inv_bf = schur_data_bf
+
+    T_bf = S_bf.T
+    n_full = size(T_bf, 1)
+    p = schur_position
+    @assert 1 <= p <= n_full "schur_position $p out of range 1:$n_full"
+
+    # Target eigenvalue from Schur diagonal
+    T_diag = diag(T_bf)
+    λ_tgt_bf = real(T_diag[p])
+    λ_tgt = ComplexF64(λ_tgt_bf)
+
+    # Verify ordering: eigenvalues 1:p-1 must all be larger in magnitude
+    λ_tgt_abs = abs(T_diag[p])
+    for i in 1:p-1
+        if abs(T_diag[i]) < λ_tgt_abs
+            error("Schur diagonal not sorted by magnitude: " *
+                  "|T[$i,$i]| = $(Float64(abs(T_diag[i]))) < |T[$p,$p]| = $(Float64(λ_tgt_abs)). " *
+                  "Natural Schur ordering assumption failed.")
+        end
+    end
+
+    # Step 2: Extract blocks directly from natural Schur order (no ordschur!)
+    k_block = p - 1
+    m_block = n_full - k_block
+
+    if k_block == 0
+        # Target is the largest eigenvalue — no T₁₁ block
+        T11_bf = zeros(BigFloat, 0, 0)
+        T12_bf = zeros(BigFloat, 0, m_block)
+        T22_bf = T_bf
+    else
+        T11_bf = T_bf[1:k_block, 1:k_block]
+        T12_bf = T_bf[1:k_block, p:end]
+        T22_bf = T_bf[p:end, p:end]
+    end
+
+    # T₂₂ → Float64 BallMatrix for fast svdbox
+    T22_f64 = bigfloat_ball_to_float64_ball(BallMatrix(T22_bf))
+
+    # ‖T₁₂‖_F (rigorous upper bound)
+    if k_block > 0
+        T12_bf_abs = abs.(T12_bf)
+        T12_norm_bf = sqrt(sum(T12_bf_abs .^ 2))
+        T12_norm = _bigfloat_to_float64_upper(T12_norm_bf)
+    else
+        T12_norm = 0.0
+    end
+
+    @info "schur direct (no ordschur)" p k_block m_block T12_norm
+
+    # Step 3: Auto-set circle radius
+    if circle_radius <= 0
+        min_dist = BigFloat(Inf)
+        for i in 1:n_full
+            i == p && continue
+            d = abs(T_diag[i] - T_diag[p])
+            min_dist = min(min_dist, d)
+        end
+        circle_radius = Float64(min_dist) / 2.0
+        @info "auto circle radius" Float64(min_dist) circle_radius
+    end
+    circle_radius_f64 = Float64(circle_radius)
+
+    # Step 4: Schur bridge constants (rigorous, from compute_schur_and_error)
+    norm_Z_f64 = _ball_to_float64_upper(norm_Z_bf)
+    norm_Z_inv_f64 = _ball_to_float64_upper(norm_Z_inv_bf)
+
+    # Step 5: T₁₁ bound via BigFloat SVD + Weyl propagation
+    if k_block > 0
+        # Compute σ_min(z₀I - T₁₁) at the circle center z₀ = λ_tgt
+        z0_bf = Complex{BigFloat}(λ_tgt_bf, zero(BigFloat))
+        zI_T11_center = z0_bf * I - Complex{BigFloat}.(T11_bf)
+        zI_T11_ball = BallMatrix(zI_T11_center)
+
+        # Native BigFloat SVD via GenericLinearAlgebra, then Miyajima M1 certification
+        svdA = svd(zI_T11_center)
+        sv11_result = BallArithmetic._certify_svd(
+            zI_T11_ball, svdA, BallArithmetic.MiyajimaM1(); apply_vbd=true)
+        sv11_center = sv11_result.singular_values
+        σ11_center_ball = sv11_center[end]
+        σ11_center_lower_bf = BallArithmetic.mid(σ11_center_ball) - BallArithmetic.rad(σ11_center_ball)
+        σ11_center_lower = max(Float64(σ11_center_lower_bf), 0.0)
+
+        # Weyl propagation to circle: σ_min(zI-T₁₁) ≥ σ_min(z₀I-T₁₁) - ρ
+        σ11_on_circle = σ11_center_lower - circle_radius_f64
+        @info "T₁₁ bound (GenericLinearAlgebra SVD + Weyl)" σ11_center_lower σ11_on_circle circle_radius_f64
+    else
+        σ11_on_circle = Inf
+    end
+
+    if k_block > 0 && σ11_on_circle <= 0
+        @warn "σ_min(zI-T₁₁) bound ≤ 0: target too close to T₁₁ spectrum" σ11_center_lower circle_radius_f64
+        max_resolvent = Inf
+        max_res_T11 = Inf
+        max_res_T22 = 0.0
+    else
+        r11 = k_block > 0 ? setrounding(Float64, RoundUp) do; 1.0 / σ11_on_circle; end : 0.0
+        max_res_T11 = r11
+
+        # T₂₂: scan circle with Float64 svdbox
+        max_res_T22 = 0.0
+        max_resolvent = 0.0
+
+        for s in 0:(circle_samples - 1)
+            θ = 2π * s / circle_samples
+            z_f64 = ComplexF64(real(λ_tgt) + circle_radius_f64 * cos(θ),
+                               imag(λ_tgt) + circle_radius_f64 * sin(θ))
+
+            sv22 = svdbox(T22_f64 - z_f64 * I)
+            σ22_ball = sv22[end]
+            σ22_lower = max(Float64(BallArithmetic.mid(σ22_ball)) -
+                            Float64(BallArithmetic.rad(σ22_ball)), 0.0)
+
+            if σ22_lower <= 0
+                @warn "σ_min(zI-T₂₂) ≤ 0 at sample s=$s" σ22_lower
+                max_resolvent = Inf
+                break
+            end
+
+            # Block triangular resolvent formula
+            if k_block > 0
+                res_z = setrounding(Float64, RoundUp) do
+                    inv_σ22 = 1.0 / σ22_lower
+                    r11 * (1.0 + T12_norm * inv_σ22) + inv_σ22
+                end
+            else
+                res_z = setrounding(Float64, RoundUp) do
+                    1.0 / σ22_lower
+                end
+            end
+
+            r22 = setrounding(Float64, RoundUp) do
+                1.0 / σ22_lower
+            end
+
+            max_res_T22 = max(max_res_T22, r22)
+            max_resolvent = max(max_resolvent, res_z)
+        end
+    end
+
+    # Step 6: Schur similarity bridge (rigorous via compute_schur_and_error bounds)
+    resolvent_Mr = setrounding(Float64, RoundUp) do
+        norm_Z_f64 * max_resolvent * norm_Z_inv_f64
+    end
+
+    # Step 7: Small-gain check
+    ε_K = Float64(real(compute_Δ(K; N=N)))
+    α = setrounding(Float64, RoundUp) do
+        ε_K * resolvent_Mr
+    end
+    is_certified = α < 1.0
+
+    λ_radius = is_certified ? circle_radius_f64 : Inf
+    timing = time() - t0
+
+    return OrdschurDirectResult(
+        λ_tgt, λ_radius, Ball(λ_tgt, λ_radius),
+        circle_radius_f64, circle_samples,
+        resolvent_Mr, max_res_T11, max_res_T22, T12_norm,
+        α, is_certified, ε_K, K + 1, Float64(r),
+        k_block, :schur_direct, timing
     )
 end
 
