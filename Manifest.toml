@@ -99,7 +99,7 @@ uuid = "39de3d68-74b9-583c-8d2d-e117c070f3a9"
 version = "0.4.8"
 
 [[deps.BallArithmetic]]
-deps = ["Combinatorics", "Coverage", "DoubleFloats", "GenericLinearAlgebra", "JLD2", "LinearAlgebra", "MacroTools", "MultiFloats", "OpenBLASConsistentFPCSR_jll", "RoundingEmulator", "SetRounding"]
+deps = ["Combinatorics", "Coverage", "DoubleFloats", "GenericLinearAlgebra", "GenericSchur", "JLD2", "LinearAlgebra", "MacroTools", "MultiFloats", "OpenBLASConsistentFPCSR_jll", "RoundingEmulator", "SetRounding"]
 path = "../BallArithmetic.jl"
 uuid = "77e4f72b-b5a4-4fb0-ac2a-dcc32095a072"
 version = "0.1.1"
@@ -547,7 +547,7 @@ uuid = "9fa8497b-333b-5362-9e8d-4d0656e87820"
 version = "1.11.0"
 
 [[deps.GKWExperiments]]
-deps = ["ArbNumerics", "BallArithmetic", "CairoMakie", "Distributed", "GenericLinearAlgebra", "JLD2", "LinearAlgebra", "Plots", "Pseudospectra"]
+deps = ["ArbNumerics", "BallArithmetic", "CairoMakie", "Distributed", "GenericLinearAlgebra", "GenericSchur", "JLD2", "LinearAlgebra", "Plots", "Pseudospectra"]
 path = "."
 uuid = "23d24274-9279-4508-bbc8-8b75d9987b64"
 version = "0.0.1-DEV"

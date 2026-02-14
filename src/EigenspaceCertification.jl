@@ -17,6 +17,7 @@ import ..GKWDiscretization: gkw_matrix_direct
 
 export GKWEigenCertificationResult, certify_gkw_eigenspaces
 export arb_to_ball_matrix
+export float64_ball_to_bigfloat_ball, bigfloat_ball_to_float64_ball
 
 """
     GKWEigenCertificationResult
@@ -91,6 +92,65 @@ function arb_to_ball_matrix(M_arb::Matrix{ArbComplex{P}}) where {P}
 
         # Combined radius for complex ball
         M_radius[i, j] = sqrt(total_rad_real^2 + total_rad_imag^2)
+    end
+
+    return BallMatrix(M_center, M_radius)
+end
+
+
+"""
+    float64_ball_to_bigfloat_ball(M::BallMatrix) → BallMatrix{BigFloat}
+
+Promote a Float64 BallMatrix to BigFloat precision.
+
+Float64 → BigFloat conversion is exact, so centers and radii are preserved
+without any additional error.
+"""
+function float64_ball_to_bigfloat_ball(M::BallMatrix)
+    center_bf = Complex{BigFloat}.(BallArithmetic.mid(M))
+    radius_bf = BigFloat.(BallArithmetic.rad(M))
+    return BallMatrix(center_bf, radius_bf)
+end
+
+
+"""
+    bigfloat_ball_to_float64_ball(M::BallMatrix) → BallMatrix{Float64}
+
+Convert a BigFloat BallMatrix to Float64 with rigorous error enclosure.
+
+The radius includes both the original BigFloat uncertainty and the
+conversion error from BigFloat to Float64 centers. Follows the same
+pattern as [`arb_to_ball_matrix`](@ref).
+"""
+function bigfloat_ball_to_float64_ball(M::BallMatrix)
+    M_c = BallArithmetic.mid(M)
+    M_r = BallArithmetic.rad(M)
+    n, m = size(M_c)
+    M_center = Matrix{ComplexF64}(undef, n, m)
+    M_radius = Matrix{Float64}(undef, n, m)
+
+    for i in 1:n, j in 1:m
+        c_bf = M_c[i, j]
+        r_bf = BigFloat(M_r[i, j])
+
+        # Convert center to Float64
+        center_real = Float64(real(c_bf))
+        center_imag = Float64(imag(c_bf))
+        M_center[i, j] = Complex{Float64}(center_real, center_imag)
+
+        # Conversion error in BigFloat (exact in BigFloat precision)
+        conv_err_real = abs(real(c_bf) - BigFloat(center_real))
+        conv_err_imag = abs(imag(c_bf) - BigFloat(center_imag))
+
+        # Total radius in BigFloat: original + conversion error
+        total_rad_bf = r_bf + sqrt(conv_err_real^2 + conv_err_imag^2)
+
+        # Convert to Float64 (rigorous upper bound via nextfloat)
+        rad_f64 = Float64(total_rad_bf)
+        if BigFloat(rad_f64) < total_rad_bf
+            rad_f64 = nextfloat(rad_f64)
+        end
+        M_radius[i, j] = rad_f64
     end
 
     return BallMatrix(M_center, M_radius)

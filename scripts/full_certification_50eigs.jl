@@ -356,6 +356,11 @@ println()
 # Phase 1c: BigFloat Resolvent for remaining eigenvalues
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Variables saved from Phase 1c for reuse in Phase 1d (BigFloat deflation)
+saved_bf_K = 0
+saved_A_ball_bf = nothing
+saved_sd_bf = nothing
+
 if !isempty(uncertified)
     println("-"^80)
     println("Phase 1c: BigFloat RESOLVENT for remaining eigenvalues")
@@ -474,6 +479,11 @@ if !isempty(uncertified)
 
         filter!(i -> !(i in newly_certified_bf), uncertified)
         @info "  BigFloat K=$bf_K: certified $(length(newly_certified_bf)), $(length(uncertified)) remaining."
+
+        # Save for Phase 1d (BigFloat deflation)
+        global saved_bf_K = bf_K
+        global saved_A_ball_bf = A_ball_bf
+        global saved_sd_bf = sd_bf
     end
 end
 
@@ -481,10 +491,123 @@ end
 num_resolvent_certified = count(r -> r.is_certified, resolvent_results)
 println()
 println("="^80)
-println("PHASE 1 SUMMARY")
+println("PHASE 1 SUMMARY (RESOLVENT)")
 println("="^80)
 println("  Resolvent certified (Float64): $num_resolvent_f64 / $NUM_EIGS")
 println("  Resolvent certified (total):   $num_resolvent_certified / $NUM_EIGS")
+if !isempty(uncertified)
+    println("  UNCERTIFIED eigenvalues: $uncertified")
+end
+println()
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 1d: BigFloat Deflation for remaining eigenvalues
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Deflation result storage (parallel to resolvent_results)
+deflation_results = Dict{Int, DeflationCertificationResult}()
+
+# Deflation configuration
+const DEFL_IMAGE_RADIUS   = 0.5    # radius in p-space around z=1
+const DEFL_IMAGE_SAMPLES  = 256    # samples on image circle
+const DEFL_POWER          = 1      # polynomial power q
+const DEFL_BACKMAP_ORDER  = 2      # rigorous second-order backmap
+
+if !isempty(uncertified) && saved_A_ball_bf !== nothing
+    println("="^80)
+    println("PHASE 1d: BIGFLOAT DEFLATION FOR REMAINING EIGENVALUES")
+    println("="^80)
+    println()
+
+    bf_K_defl = saved_bf_K
+    @info "Using BigFloat BallMatrix at K=$bf_K_defl with pre-computed Schur data"
+
+    # Also need the Float64 BallMatrix at the same K for the bridge constant
+    cache_f64_defl = joinpath(CACHE_DIR, "ball_matrix_K$(bf_K_defl).jls")
+    local A_f64_defl
+    if isfile(cache_f64_defl)
+        A_f64_defl = deserialize(cache_f64_defl)
+        @info "  Loaded Float64 BallMatrix at K=$bf_K_defl"
+    else
+        @warn "  No cached Float64 BallMatrix at K=$bf_K_defl — building from BigFloat"
+        A_f64_defl = bigfloat_ball_to_float64_ball(saved_A_ball_bf)
+    end
+
+    # Certified indices: eigenvalues already proven by resolvent (sorted by magnitude)
+    certified_idx_set = sort([i for i in 1:NUM_EIGS if resolvent_results[i].is_certified])
+    @info "  Deflating $(length(certified_idx_set)) resolvent-certified eigenvalues"
+    println()
+
+    newly_certified_defl = Int[]
+
+    for i in sort(collect(uncertified))
+        # Target eigenvalue (from the best available source)
+        λ_center = if bf_eigs_for_resolvent !== nothing && i ≤ length(bf_eigs_for_resolvent)
+            Float64(bf_eigs_for_resolvent[i])
+        else
+            real(lambda_centers[i])
+        end
+
+        @info "  j=$i: BigFloat deflation at K=$bf_K_defl, λ ≈ $(@sprintf("%.4e", λ_center)), deflating $(length(certified_idx_set)) eigenvalues..."
+
+        local defl_result
+        try
+            t_defl = time()
+            defl_result = certify_eigenvalue_deflation_bigfloat(
+                A_f64_defl, ComplexF64(λ_center), certified_idx_set;
+                K=bf_K_defl, r=1.0, N=N_SPLITTING, q=DEFL_POWER,
+                image_circle_radius=DEFL_IMAGE_RADIUS,
+                image_circle_samples=DEFL_IMAGE_SAMPLES,
+                backmap_order=DEFL_BACKMAP_ORDER,
+                schur_data_bf=saved_sd_bf)
+            dt_defl = time() - t_defl
+        catch e
+            @warn "  j=$i: BigFloat deflation failed: $(typeof(e)): $e"
+            continue
+        end
+
+        deflation_results[i] = defl_result
+
+        if defl_result.is_certified
+            # Also record in resolvent_results for downstream phases
+            resolvent_results[i] = ResolventResult(
+                i, ComplexF64(λ_center), bf_K_defl,
+                defl_result.eigenvalue_radius,  # use backmap radius as "circle radius"
+                defl_result.resolvent_Mr,
+                defl_result.small_gain_factor,
+                defl_result.truncation_error,
+                defl_result.resolvent_Mr / max(1.0 - defl_result.small_gain_factor, eps()),
+                true)
+            push!(newly_certified_defl, i)
+
+            # Add to certified set for incremental deflation
+            push!(certified_idx_set, i)
+            sort!(certified_idx_set)
+
+            @printf("  j=%2d: CERTIFIED (deflation K=%d), α=%.4e, M_r=%.4e, |p'|=%.4e, Δλ=%.4e [%.1fs]\n",
+                    i, bf_K_defl, defl_result.small_gain_factor,
+                    defl_result.resolvent_Mr, defl_result.p_derivative_at_target,
+                    defl_result.eigenvalue_radius, defl_result.timing)
+        else
+            @printf("  j=%2d: FAILED (deflation K=%d), α=%.4e, M_r=%.4e [%.1fs]\n",
+                    i, bf_K_defl, defl_result.small_gain_factor,
+                    defl_result.resolvent_Mr, defl_result.timing)
+        end
+    end
+
+    filter!(i -> !(i in newly_certified_defl), uncertified)
+    @info "  BigFloat deflation: certified $(length(newly_certified_defl)), $(length(uncertified)) remaining."
+    println()
+end
+
+# Update resolvent count after deflation
+num_resolvent_certified = count(r -> r.is_certified, resolvent_results)
+println("="^80)
+println("PHASE 1 SUMMARY (RESOLVENT + DEFLATION)")
+println("="^80)
+println("  Resolvent certified (Float64):    $num_resolvent_f64 / $NUM_EIGS")
+println("  Resolvent + deflation (total):    $num_resolvent_certified / $NUM_EIGS")
+println("  Deflation certified:              $(length(deflation_results)) eigenvalues")
 if !isempty(uncertified)
     println("  UNCERTIFIED eigenvalues: $uncertified")
 end
@@ -877,8 +1000,10 @@ end
 
 println("-"^130)
 println()
+num_deflation_certified = count(kv -> kv.second.is_certified, deflation_results)
 println("CERTIFICATION STATISTICS:")
 println("  Stage 1 (resolvent): $num_resolvent_certified / $NUM_EIGS")
+println("  Stage 1d (deflation): $num_deflation_certified")
 println("  Stage 2 (NK):        $num_nk_certified / $NUM_EIGS")
 println("  Transfer bridge:     $(count(r -> r.transfer_valid, transfer_results)) / $NUM_EIGS")
 println("  Fully certified:     $num_fully_certified / $NUM_EIGS")
@@ -908,6 +1033,14 @@ save_data = Dict(
     :resolvent_Ak => [r.resolvent_Ak for r in resolvent_results],
     :circle_radii => [r.circle_radius for r in resolvent_results],
     :lambda_centers => [r.lambda_center for r in resolvent_results],
+    # Deflation (Phase 1d)
+    :deflation_indices => collect(keys(deflation_results)),
+    :deflation_certified => Dict(k => v.is_certified for (k, v) in deflation_results),
+    :deflation_alpha => Dict(k => v.small_gain_factor for (k, v) in deflation_results),
+    :deflation_radius => Dict(k => v.eigenvalue_radius for (k, v) in deflation_results),
+    :deflation_Mr => Dict(k => v.resolvent_Mr for (k, v) in deflation_results),
+    :deflation_dp => Dict(k => v.p_derivative_at_target for (k, v) in deflation_results),
+    :deflation_poly_degree => Dict(k => v.deflation_polynomial_degree for (k, v) in deflation_results),
     # Tail
     :tail_certified => tail_certified,
     :tail_rho => ρ_tail,

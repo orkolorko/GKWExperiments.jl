@@ -28,11 +28,13 @@ using BallArithmetic
 import ..Constants: compute_C2, compute_Δ, h2_whiten
 import ..Constants: poly_bridge_constant_powers_from_coeffs
 import ..EigenspaceCertification: GKWEigenCertificationResult, arb_to_ball_matrix
+import ..EigenspaceCertification: float64_ball_to_bigfloat_ball, bigfloat_ball_to_float64_ball
 import ..Polynomials: deflation_polynomial, polyval, polyval_derivative
 
 # Import CertifScripts for resolvent certification
 using BallArithmetic.CertifScripts: CertificationCircle, run_certification,
-    run_certification_parametric, run_certification_ogita
+    run_certification_parametric, run_certification_ogita,
+    compute_schur_and_error
 
 export InfiniteDimCertificationResult
 export resolvent_bridge_condition, certified_resolvent_bound
@@ -40,6 +42,7 @@ export eigenvalue_inclusion_radius, projector_approximation_error
 export newton_kantorovich_error
 export certify_eigenvalue_lift, verify_spectral_gap
 export DeflationCertificationResult, certify_eigenvalue_deflation, backmap_inclusion_radius
+export certify_eigenvalue_deflation_bigfloat
 export deflation_truncation_error
 export TwoStageCertificationResult, reverse_transfer_resolvent_bound
 export projector_approximation_error_rigorous
@@ -823,6 +826,209 @@ function certify_eigenvalue_deflation(A::BallMatrix, lambda_tgt::Number,
         Float64(r),
         method,
         timing
+    )
+end
+
+# ============================================================================
+# BigFloat Deflation Certification Pipeline
+# ============================================================================
+
+"""
+    _bigfloat_to_float64_upper(x::BigFloat) → Float64
+
+Convert a BigFloat to Float64 with rigorous upper bound (nextfloat if needed).
+"""
+function _bigfloat_to_float64_upper(x::BigFloat)
+    f = Float64(x)
+    if BigFloat(f) < x
+        f = nextfloat(f)
+    end
+    return f
+end
+
+"""
+    _ball_to_float64_upper(x) → Float64
+
+Extract a rigorous Float64 upper bound from a Ball (any precision) or scalar.
+"""
+_ball_to_float64_upper(x::Float64) = x
+_ball_to_float64_upper(x::BigFloat) = _bigfloat_to_float64_upper(x)
+function _ball_to_float64_upper(x)
+    # For Ball types: upper bound = |mid| + rad
+    m = abs(BallArithmetic.mid(x))
+    r = BallArithmetic.rad(x)
+    return _bigfloat_to_float64_upper(BigFloat(m) + BigFloat(r))
+end
+
+"""
+    certify_eigenvalue_deflation_bigfloat(A_f64::BallMatrix, lambda_tgt::Number,
+                                           certified_indices::AbstractVector{<:Integer};
+                                           K::Int, r::Real=1.0, N::Int=5000,
+                                           q::Int=1,
+                                           image_circle_radius::Real=0.5,
+                                           image_circle_samples::Int=256,
+                                           backmap_order::Int=2,
+                                           use_tight_bridge::Bool=true,
+                                           schur_data_bf=nothing)
+
+Certify an eigenvalue via polynomial deflation using BigFloat Schur decomposition.
+
+This function targets eigenvalues that are too small for direct resolvent
+certification (|λ| < 10⁻²⁰). It uses BigFloat precision for the Schur
+decomposition and deflation polynomial construction, then converts to Float64
+for fast SVD certification.
+
+# Pipeline
+1. Promote `A_f64` to BigFloat BallMatrix.
+2. Compute BigFloat Schur decomposition (or reuse `schur_data_bf`).
+3. Build deflation polynomial `p` in BigFloat using Schur diagonal eigenvalues
+   at `certified_indices`, normalized so `p(lambda_tgt) = 1`.
+4. Evaluate `p(T)` in BigFloat via Horner on the upper triangular Schur factor.
+5. Convert `p(T)` to Float64 BallMatrix (radii capture conversion error).
+6. Certify `σ_min(p(T) - zI) > 0` on the image circle around `z = 1`.
+7. Apply Schur bridge to get `M_r = ‖(zI - p(A_k))⁻¹‖`.
+8. Check small-gain: `ε_{p,r} · M_r < 1`.
+9. Back-map via `backmap_inclusion_radius` to get eigenvalue enclosure.
+
+# Arguments
+- `A_f64`: Float64 GKW discretization matrix as BallMatrix
+- `lambda_tgt`: target eigenvalue to certify
+- `certified_indices`: indices (in magnitude-sorted order) of already-certified
+  eigenvalues to deflate — their BigFloat values are taken from `diag(T)`
+- `K`: discretization order (matrix is (K+1)×(K+1))
+- `r`: Hardy space radius (default 1.0)
+- `N`: splitting parameter for C₂ computation
+- `q`: power of the deflation polynomial
+- `image_circle_radius`: radius of certification circle around 1 in p-space
+- `image_circle_samples`: number of samples on image circle
+- `backmap_order`: 1 (first-order) or 2 (rigorous second-order via p'')
+- `use_tight_bridge`: use `poly_bridge_constant_powers_from_coeffs` for tighter bound
+- `schur_data_bf`: pre-computed BigFloat Schur data (5-tuple from `compute_schur_and_error`);
+  if `nothing`, computed from `A_f64` promoted to BigFloat
+
+# Returns
+[`DeflationCertificationResult`](@ref)
+"""
+function certify_eigenvalue_deflation_bigfloat(A_f64::BallMatrix, lambda_tgt::Number,
+                                                certified_indices::AbstractVector{<:Integer};
+                                                K::Int, r::Real=1.0, N::Int=5000,
+                                                q::Int=1,
+                                                image_circle_radius::Real=0.5,
+                                                image_circle_samples::Int=256,
+                                                backmap_order::Int=2,
+                                                use_tight_bridge::Bool=true,
+                                                schur_data_bf=nothing)
+    t0 = time()
+    λ_tgt = ComplexF64(lambda_tgt)
+
+    # Step 1: Promote to BigFloat BallMatrix
+    A_bf = float64_ball_to_bigfloat_ball(A_f64)
+
+    # Step 2: BigFloat Schur decomposition (reuse if provided)
+    if schur_data_bf === nothing
+        schur_data_bf = compute_schur_and_error(A_bf)
+    end
+    S_bf, _, _, norm_Z_bf, norm_Z_inv_bf = schur_data_bf
+
+    # Step 3: BigFloat deflation polynomial from Schur diagonal eigenvalues
+    T_bf_diag = diag(S_bf.T)
+    sorted_idx = sortperm(abs.(T_bf_diag), rev=true)
+    bf_zeros = BigFloat.(real.(T_bf_diag[sorted_idx[certified_indices]]))
+    bf_coeffs = deflation_polynomial(bf_zeros, BigFloat(real(λ_tgt)); q=q)
+    poly_degree = length(bf_coeffs) - 1
+
+    # Step 4: Evaluate p(T) in BigFloat via Horner
+    bT_bf = BallMatrix(S_bf.T)
+    pT_bf = BallArithmetic.CertifScripts._polynomial_matrix(bf_coeffs, bT_bf)
+
+    # Step 5: Convert p(T) to Float64 BallMatrix (radii capture conversion error)
+    pT_f64 = bigfloat_ball_to_float64_ball(pT_bf)
+
+    # Step 6: Certify σ_min(pT - zI) on circle around z=1
+    max_resolvent_pT = 0.0
+    for k in 0:(image_circle_samples - 1)
+        θ = 2π * k / image_circle_samples
+        z = ComplexF64(1.0 + image_circle_radius * cos(θ),
+                       image_circle_radius * sin(θ))
+
+        sigma_vals = svdbox(pT_f64 - z * I)
+        sigma_min_ball = sigma_vals[end]
+
+        # Rigorous lower bound on σ_min
+        sigma_lower = Float64(BallArithmetic.mid(sigma_min_ball)) -
+                      Float64(BallArithmetic.rad(sigma_min_ball))
+        sigma_lower = max(sigma_lower, 0.0)
+        if sigma_lower <= 0
+            @warn "σ_min ≤ 0 at sample k=$k (z=$z); certification will fail"
+            max_resolvent_pT = Inf
+            break
+        end
+
+        resolvent_z = setrounding(Float64, RoundUp) do
+            1.0 / sigma_lower
+        end
+        max_resolvent_pT = max(max_resolvent_pT, resolvent_z)
+    end
+
+    # Step 7: Schur bridge — M_r from ‖(zI - p(A_k))⁻¹‖
+    # For BigFloat Schur: norm_Z ≈ 1, norm_Z_inv ≈ 1, so M_r ≈ max_resolvent_pT
+    norm_Z_f64 = _ball_to_float64_upper(norm_Z_bf)
+    norm_Z_inv_f64 = _ball_to_float64_upper(norm_Z_inv_bf)
+
+    resolvent_Mr = setrounding(Float64, RoundUp) do
+        norm_Z_f64 * max_resolvent_pT * norm_Z_inv_f64
+    end
+
+    # Step 8: Polynomial perturbation bound ε_{p,r} = ε_K · C_r^{pow}
+    ε_K = Float64(real(compute_Δ(K; N=N)))
+    poly_coeffs_f64 = Float64.(bf_coeffs)
+
+    if use_tight_bridge
+        Ak_center = BallArithmetic.mid(A_f64)
+        Cr, _, _, _ = poly_bridge_constant_powers_from_coeffs(
+            poly_coeffs_f64, Ak_center; r=Float64(r), εr=ε_K)
+        bridge_const = Float64(BallArithmetic.mid(Cr)) + Float64(BallArithmetic.rad(Cr))
+        eps_p = setrounding(Float64, RoundUp) do
+            ε_K * bridge_const
+        end
+    else
+        Ak_norm_ball = svd_bound_L2_opnorm(
+            BallMatrix(h2_whiten(BallArithmetic.mid(A_f64), Float64(r))))
+        Ak_norm = Float64(BallArithmetic.mid(Ak_norm_ball)) +
+                  Float64(BallArithmetic.rad(Ak_norm_ball))
+        Lr_norm = Ak_norm + ε_K
+        eps_p = deflation_truncation_error(poly_coeffs_f64, Ak_norm, Lr_norm, ε_K)
+        bridge_const = eps_p / ε_K
+    end
+
+    # Step 9: Small-gain check
+    α = setrounding(Float64, RoundUp) do
+        eps_p * resolvent_Mr
+    end
+    is_certified = α < 1.0
+
+    # Step 10: Back-map to λ-space
+    if is_certified
+        image_certified_radius = Float64(image_circle_radius)
+        λ_radius, dp_abs = backmap_inclusion_radius(
+            image_certified_radius, poly_coeffs_f64, real(λ_tgt); order=backmap_order)
+    else
+        image_certified_radius = Inf
+        _, dp_abs = backmap_inclusion_radius(1.0, poly_coeffs_f64, real(λ_tgt); order=1)
+        λ_radius = Inf
+    end
+
+    timing = time() - t0
+    cert_eigs = ComplexF64.(bf_zeros)
+
+    return DeflationCertificationResult(
+        λ_tgt, λ_radius, Ball(λ_tgt, λ_radius),
+        poly_coeffs_f64, poly_degree, q,
+        cert_eigs,
+        Float64(image_circle_radius), image_certified_radius,
+        eps_p, bridge_const, resolvent_Mr, α, Float64(dp_abs),
+        is_certified, ε_K, K + 1, Float64(r),
+        :bigfloat_deflation, timing
     )
 end
 

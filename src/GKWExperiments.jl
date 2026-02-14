@@ -66,6 +66,7 @@ include("EigenspaceCertification.jl")
 using .EigenspaceCertification
 export GKWEigenCertificationResult, certify_gkw_eigenspaces
 export arb_to_ball_matrix
+export float64_ball_to_bigfloat_ball, bigfloat_ball_to_float64_ball
 
 # Finite-to-infinite dimensional lift (resolvent bridge and spectral stability)
 include("InfiniteDimensionalLift.jl")
@@ -76,6 +77,7 @@ export eigenvalue_inclusion_radius, projector_approximation_error
 export newton_kantorovich_error
 export certify_eigenvalue_lift, verify_spectral_gap
 export DeflationCertificationResult, certify_eigenvalue_deflation, backmap_inclusion_radius
+export certify_eigenvalue_deflation_bigfloat
 export deflation_truncation_error
 export TwoStageCertificationResult, reverse_transfer_resolvent_bound
 export projector_approximation_error_rigorous
