@@ -121,33 +121,19 @@ else
     Q0 = Complex{BigFloat}.(sd_bf[:Q_bf])
     T0 = Complex{BigFloat}.(sd_bf[:T_bf])
 
-    # Compute Schur quality using svd_bound_L2_opnorm (tightest operator norm)
+    # Compute Schur quality using upper_bound_L2_opnorm (Collatz + interpolation)
+    # This is a good middle ground: much tighter than Frobenius, much faster than SVD
     A_complex = Complex{BigFloat}.(A_real_center)
     T_hat = Q0' * A_complex * Q0
     E = tril(T_hat, -1)   # strictly lower triangular = residual
     T_clean = T_hat - E   # upper triangular part
 
-    @info "Computing rigorous SVD bounds for Schur quality..."
-    t_svd = time()
-    E_ball = BallMatrix(E)
-    E_norm_fast = upper_bound_L2_opnorm(E_ball)
-    E_norm_svd  = svd_bound_L2_opnorm(E_ball)
-    @printf("    ||E||: fast=%.4e, svd=%.4e (ratio=%.1fx) [%.1fs]\n",
-            Float64(E_norm_fast), Float64(E_norm_svd),
-            Float64(E_norm_fast / E_norm_svd), time()-t_svd)
-
-    A_ball_complex = BallMatrix(A_complex)
-    A_norm = svd_bound_L2_opnorm(A_ball_complex)
-    residual_norm = E_norm_svd / A_norm
+    E_norm = upper_bound_L2_opnorm(BallMatrix(E))
+    A_norm = upper_bound_L2_opnorm(BallMatrix(A_complex))
+    residual_norm = E_norm / A_norm
 
     Y = Q0' * Q0 - Matrix{Complex{BigFloat}}(I, n, n)
-    t_svd = time()
-    Y_ball = BallMatrix(Y)
-    orth_fast = upper_bound_L2_opnorm(Y_ball)
-    orth_defect = svd_bound_L2_opnorm(Y_ball)
-    @printf("    ||Q'Q-I||: fast=%.4e, svd=%.4e (ratio=%.1fx) [%.1fs]\n",
-            Float64(orth_fast), Float64(orth_defect),
-            Float64(orth_fast / orth_defect), time()-t_svd)
+    orth_defect = upper_bound_L2_opnorm(BallMatrix(Y))
 
     @printf("  GenericSchur quality: residual_norm=%.2e, orth_defect=%.2e\n",
             Float64(residual_norm), Float64(orth_defect))
@@ -156,8 +142,9 @@ else
     Q_ball, T_ball = certify_schur_decomposition(A_ball_bf, schur_result)
     @printf("  Done in %.1fs\n", time()-t0)
 
-    # Schur error and orthogonality defect (A_norm already computed via SVD above)
-    E_bound_bf = schur_result.residual_norm * A_norm
+    # Schur error and orthogonality defect
+    A_mid_norm = upper_bound_L2_opnorm(BallMatrix(BallArithmetic.mid(A_ball_bf)))
+    E_bound_bf = schur_result.residual_norm * A_mid_norm
     delta_bf = schur_result.orthogonality_defect
 
     # Sort eigenvalues by decreasing magnitude
@@ -178,14 +165,7 @@ println()
 flush(stdout)
 
 # Rigorous total E_bound (Schur residual + Arb→BigFloat conversion)
-@info "Computing SVD bound for ||A_rad||₂..."
-t_svd = time()
-A_rad_ball = BallMatrix(BallArithmetic.rad(A_ball_bf))
-A_rad_fast = upper_bound_L2_opnorm(A_rad_ball)
-A_rad_opnorm = svd_bound_L2_opnorm(A_rad_ball)
-@printf("  ||A_rad||: fast=%.4e, svd=%.4e (ratio=%.1fx) [%.1fs]\n",
-        Float64(A_rad_fast), Float64(A_rad_opnorm),
-        Float64(A_rad_fast / A_rad_opnorm), time()-t_svd)
+A_rad_opnorm = upper_bound_L2_opnorm(BallMatrix(BallArithmetic.rad(A_ball_bf)))
 E_bound_total = setrounding(BigFloat, RoundUp) do
     E_bound_bf + A_rad_opnorm
 end

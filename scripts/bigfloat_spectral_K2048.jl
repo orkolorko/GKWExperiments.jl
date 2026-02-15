@@ -33,8 +33,9 @@ const NUM_EIGS    = 50
 const N_SPLITTING = 5000          # C₂ splitting parameter for NK
 const n           = K + 1         # matrix dimension
 
-# Use SVD bounds for one-time norms (tighter but slower)
-const USE_SVD_BOUNDS = true
+# Use SVD bounds for one-time norms (tighter but VERY slow for BigFloat)
+# upper_bound_L2_opnorm is a good middle ground: tighter than Frobenius, much faster than SVD
+const USE_SVD_BOUNDS = false
 
 setprecision(ArbFloat, PRECISION)
 setprecision(BigFloat, PRECISION)
