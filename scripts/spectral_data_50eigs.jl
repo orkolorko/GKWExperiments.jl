@@ -167,18 +167,18 @@ else
     Q0 = Complex{BigFloat}.(sd_bf[1].Z)
     T0 = Complex{BigFloat}.(sd_bf[1].T)
 
-    # Compute Schur quality: T_hat = Q^H A Q, residual = ||stril(T_hat)||_F / ||A||_F
+    # Compute Schur quality: T_hat = Q^H A Q, residual = ||stril(T_hat)||₂ / ||A||₂
     A_complex = Complex{BigFloat}.(A_real_center)
     T_hat = Q0' * A_complex * Q0
     E = tril(T_hat, -1)   # strictly lower triangular = residual
     T_clean = T_hat - E   # upper triangular part
 
-    E_fro = sqrt(real(sum(x -> abs(x)^2, E)))
-    A_fro = sqrt(real(sum(x -> abs(x)^2, A_complex)))
-    residual_norm = E_fro / A_fro
+    E_norm = upper_bound_L2_opnorm(BallMatrix(E))
+    A_norm = upper_bound_L2_opnorm(BallMatrix(A_complex))
+    residual_norm = E_norm / A_norm
 
     Y = Q0' * Q0 - Matrix{Complex{BigFloat}}(I, n, n)
-    orth_defect = sqrt(real(sum(x -> abs(x)^2, Y)))
+    orth_defect = upper_bound_L2_opnorm(BallMatrix(Y))
 
     @printf("  GenericSchur quality: residual_norm=%.2e, orth_defect=%.2e\n",
             Float64(residual_norm), Float64(orth_defect))
