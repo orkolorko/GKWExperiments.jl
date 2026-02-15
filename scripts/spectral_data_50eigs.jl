@@ -137,32 +137,45 @@ if isfile(CACHE_SCHUR_BALL_K256)
     delta_bf     = schur_ball_cache[:orth_defect]
     sorted_idx   = schur_ball_cache[:sorted_idx]
 else
-    # Use GenericSchur cache as seed if available, otherwise Float64 seed
-    schur_seed = nothing
-    if isfile(CACHE_SCHUR_K256)
-        @info "Loading GenericSchur seed from $CACHE_SCHUR_K256..."
-        sd_bf = Serialization.deserialize(CACHE_SCHUR_K256)
-        schur_seed = (Complex{BigFloat}.(sd_bf[1].Z), Complex{BigFloat}.(sd_bf[1].T))
-    end
-
-    # GenericSchur seed at 512-bit has residual ~2e-153, barely above
-    # default target_tol = 100·eps ≈ 1.3e-153. Use tol=1e-100 so the
-    # pre-convergence check passes and returns the seed immediately
-    # (avoids Newton-Schulz corrupting the already-good decomposition).
     @info "Computing rigorous BallMatrix Schur decomposition..."
     t0 = time()
     A_real_center = real.(BallArithmetic.mid(A_ball_bf))
-    if schur_seed !== nothing
-        schur_result = refine_schur_decomposition(
-            A_real_center, schur_seed[1], schur_seed[2];
-            target_precision=PRECISION, max_iterations=20, tol=1e-100)
+
+    if isfile(CACHE_SCHUR_K256)
+        # Load GenericSchur seed and certify directly (bypass refine_schur_decomposition).
+        # refine_schur_decomposition with complex seed runs 20 Newton-Schulz iterations
+        # that corrupt the already-good seed (residual goes 2e-153 → 2.8e-24).
+        @info "Loading GenericSchur seed from $CACHE_SCHUR_K256..."
+        sd_bf = Serialization.deserialize(CACHE_SCHUR_K256)
+        Q0 = Complex{BigFloat}.(sd_bf[1].Z)
+        T0 = Complex{BigFloat}.(sd_bf[1].T)
+
+        # Compute Schur quality: T_hat = Q^H A Q, residual = ||stril(T_hat)||_F / ||A||_F
+        A_complex = Complex{BigFloat}.(A_real_center)
+        T_hat = Q0' * A_complex * Q0
+        E = tril(T_hat, -1)   # strictly lower triangular = residual
+        T_clean = T_hat - E   # upper triangular part
+
+        E_fro = sqrt(real(sum(x -> abs(x)^2, E)))
+        A_fro = sqrt(real(sum(x -> abs(x)^2, A_complex)))
+        residual_norm = E_fro / A_fro
+
+        Y = Q0' * Q0 - Matrix{Complex{BigFloat}}(I, n, n)
+        orth_defect = sqrt(real(sum(x -> abs(x)^2, Y)))
+
+        @printf("  GenericSchur quality: residual_norm=%.2e, orth_defect=%.2e\n",
+                Float64(residual_norm), Float64(orth_defect))
+
+        schur_result = SchurRefinementResult(Q0, T_clean, 0, residual_norm, orth_defect, true)
+        Q_ball, T_ball = certify_schur_decomposition(A_ball_bf, schur_result)
     else
+        # No GenericSchur cache — use Float64 seed + refinement
         F = schur(convert.(ComplexF64, A_real_center))
         schur_result = refine_schur_decomposition(
             A_real_center, F.Z, F.T;
             target_precision=PRECISION, max_iterations=20)
+        Q_ball, T_ball = certify_schur_decomposition(A_ball_bf, schur_result)
     end
-    Q_ball, T_ball = certify_schur_decomposition(A_ball_bf, schur_result)
     @printf("  Done in %.1fs  (iterations=%d, converged=%s)\n",
             time()-t0, schur_result.iterations, schur_result.converged)
 
