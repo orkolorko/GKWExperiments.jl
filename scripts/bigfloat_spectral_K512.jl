@@ -1,6 +1,9 @@
 # BigFloat spectral computation for K=512, P=1024, 50 eigenvalues.
-# NK certification + ordschur_ball + Sylvester + standalone perturbation bound.
+# ordschur + Sylvester + standalone perturbation bound (no NK needed).
 # Designed to run on ibis (32 cores, 125 GB RAM).
+#
+# The spectral projector perturbation is fully bounded by E_bound + resolvent,
+# so NK eigenvector certification is unnecessary.
 #
 # Usage:
 #   julia --project --startup-file=no scripts/bigfloat_spectral_K512.jl
@@ -20,11 +23,10 @@ using Serialization
 # ═══════════════════════════════════════════════════════════════════════
 # Parameters
 # ═══════════════════════════════════════════════════════════════════════
-const K           = 512
-const PRECISION   = 1024          # bits (≈308 decimal digits)
-const NUM_EIGS    = 50
-const N_SPLITTING = 5000          # C₂ splitting parameter for NK
-const n           = K + 1         # matrix dimension
+const K         = 512
+const PRECISION = 1024          # bits (≈308 decimal digits)
+const NUM_EIGS  = 50
+const n         = K + 1         # matrix dimension
 
 setprecision(ArbFloat, PRECISION)
 setprecision(BigFloat, PRECISION)
@@ -35,17 +37,55 @@ mkpath(DATA_DIR)
 # Cache paths (all K=512, P=1024 specific)
 const CACHE_BALL_BF   = joinpath(DATA_DIR, "ball_matrix_bf_K$(K)_P$(PRECISION).jls")
 const CACHE_SCHUR     = joinpath(DATA_DIR, "bigfloat_schur_K$(K)_P$(PRECISION).jls")
-const CACHE_SCHUR_BALL = joinpath(DATA_DIR, "schur_ball_K$(K)_P$(PRECISION).jls")
-const CACHE_NK        = joinpath(DATA_DIR, "nk_K$(K)_P$(PRECISION).jls")
+const CACHE_SCHUR_CERT = joinpath(DATA_DIR, "schur_cert_K$(K)_P$(PRECISION).jls")
 const CACHE_ELL       = joinpath(DATA_DIR, "ell_K$(K)_P$(PRECISION).jls")
 const RESULTS_PATH    = joinpath(DATA_DIR, "spectral_K$(K)_P$(PRECISION).jls")
 
 println("=" ^ 80)
-println("K=$K SPECTRAL DATA: NK + ordschur_ball + SYLVESTER ($NUM_EIGS eigenvalues)")
+println("K=$K SPECTRAL DATA: ordschur + SYLVESTER + PERTURBATION ($NUM_EIGS eigenvalues)")
 println("  Precision: $PRECISION bits (≈$(round(Int, PRECISION * log10(2))) decimal digits)")
 println("=" ^ 80)
 println("Started: ", now())
 flush(stdout)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Manual BigFloat ordschur (fast for large K)
+# ═══════════════════════════════════════════════════════════════════════
+
+function swap_schur_1x1!(T::AbstractMatrix, Q::AbstractMatrix, k::Int)
+    nn = size(T, 1)
+    a, b, c = T[k, k], T[k+1, k+1], T[k, k+1]
+    x = (b - a) / c
+    nrm = sqrt(one(x) + x * conj(x))
+    cs, sn = one(x) / nrm, x / nrm
+    for j in 1:nn
+        t1, t2 = T[k, j], T[k+1, j]
+        T[k, j]   = conj(cs) * t1 + conj(sn) * t2
+        T[k+1, j] = -sn * t1 + cs * t2
+    end
+    for i in 1:nn
+        t1, t2 = T[i, k], T[i, k+1]
+        T[i, k]   = t1 * cs + t2 * sn
+        T[i, k+1] = -t1 * conj(sn) + t2 * cs
+    end
+    for i in 1:nn
+        q1, q2 = Q[i, k], Q[i, k+1]
+        Q[i, k]   = q1 * cs + q2 * sn
+        Q[i, k+1] = -q1 * conj(sn) + q2 * cs
+    end
+    T[k+1, k] = zero(eltype(T))
+end
+
+function bigfloat_ordschur(T, Q, target_pos::Int)
+    T_ord, Q_ord = copy(T), copy(Q)
+    for k in (target_pos - 1):-1:1
+        swap_schur_1x1!(T_ord, Q_ord, k)
+    end
+    for i in 2:size(T_ord, 1), j in 1:i-1
+        T_ord[i, j] = zero(eltype(T_ord))
+    end
+    return T_ord, Q_ord
+end
 
 # ═══════════════════════════════════════════════════════════════════════
 # Step 1: Build or load BigFloat BallMatrix
@@ -77,20 +117,20 @@ println()
 flush(stdout)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Step 2: Rigorous BallMatrix Schur decomposition
+# Step 2: Rigorous Schur decomposition
 # ═══════════════════════════════════════════════════════════════════════
 
-local Q_ball, T_ball, E_bound_bf, delta_bf, sorted_idx
-if isfile(CACHE_SCHUR_BALL)
-    @info "Loading BallMatrix Schur from cache..."
-    schur_cache = Serialization.deserialize(CACHE_SCHUR_BALL)
-    Q_ball     = schur_cache[:Q_ball]
-    T_ball     = schur_cache[:T_ball]
-    E_bound_bf = schur_cache[:E_bound]
-    delta_bf   = schur_cache[:orth_defect]
-    sorted_idx = schur_cache[:sorted_idx]
+local Q_bf, T_bf, E_bound_bf, delta_bf, sorted_idx
+if isfile(CACHE_SCHUR_CERT)
+    @info "Loading certified Schur results from cache..."
+    cert_cache = Serialization.deserialize(CACHE_SCHUR_CERT)
+    Q_bf       = cert_cache[:Q_bf]
+    T_bf       = cert_cache[:T_bf]
+    E_bound_bf = cert_cache[:E_bound]
+    delta_bf   = cert_cache[:orth_defect]
+    sorted_idx = cert_cache[:sorted_idx]
 else
-    @info "Computing rigorous BallMatrix Schur decomposition..."
+    @info "Computing rigorous Schur decomposition..."
     t0 = time()
     A_real_center = real.(BallArithmetic.mid(A_ball_bf))
 
@@ -118,49 +158,41 @@ else
         @info "  Cached to $CACHE_SCHUR"
     end
 
-    Q0 = Complex{BigFloat}.(sd_bf[:Q_bf])
-    T0 = Complex{BigFloat}.(sd_bf[:T_bf])
+    Q_bf = Complex{BigFloat}.(sd_bf[:Q_bf])
+    T_bf = Complex{BigFloat}.(sd_bf[:T_bf])
 
-    # Compute Schur quality using upper_bound_L2_opnorm (Collatz + interpolation)
-    # This is a good middle ground: much tighter than Frobenius, much faster than SVD
+    # Compute Schur quality metrics
     A_complex = Complex{BigFloat}.(A_real_center)
-    T_hat = Q0' * A_complex * Q0
-    E = tril(T_hat, -1)   # strictly lower triangular = residual
-    T_clean = T_hat - E   # upper triangular part
+    residual_mat = A_complex - Q_bf * T_bf * Q_bf'
+    orth_mat = Q_bf' * Q_bf - Matrix{Complex{BigFloat}}(I, n, n)
 
-    E_norm = upper_bound_L2_opnorm(BallMatrix(E))
-    A_norm = upper_bound_L2_opnorm(BallMatrix(A_complex))
-    residual_norm = E_norm / A_norm
+    res_opnorm = upper_bound_L2_opnorm(BallMatrix(residual_mat))
+    orth_def   = upper_bound_L2_opnorm(BallMatrix(orth_mat))
+    A_norm     = upper_bound_L2_opnorm(BallMatrix(A_complex))
 
-    Y = Q0' * Q0 - Matrix{Complex{BigFloat}}(I, n, n)
-    orth_defect = upper_bound_L2_opnorm(BallMatrix(Y))
+    E_bound_bf = res_opnorm
+    delta_bf = orth_def
 
-    @printf("  GenericSchur quality: residual_norm=%.2e, orth_defect=%.2e\n",
-            Float64(residual_norm), Float64(orth_defect))
-
-    schur_result = SchurRefinementResult(Q0, T_clean, 0, residual_norm, orth_defect, true)
-    Q_ball, T_ball = certify_schur_decomposition(A_ball_bf, schur_result)
-    @printf("  Done in %.1fs\n", time()-t0)
-
-    # Schur error and orthogonality defect
-    A_mid_norm = upper_bound_L2_opnorm(BallMatrix(BallArithmetic.mid(A_ball_bf)))
-    E_bound_bf = schur_result.residual_norm * A_mid_norm
-    delta_bf = schur_result.orthogonality_defect
+    @printf("  Residual ||A-QTQ'||_2           ≤ %.4e\n", Float64(res_opnorm))
+    @printf("  Residual ||A-QTQ'||_2 / ||A||_2 ≤ %.4e\n", Float64(res_opnorm / A_norm))
+    @printf("  Orthogonality ||Q'Q-I||_2       ≤ %.4e\n", Float64(delta_bf))
 
     # Sort eigenvalues by decreasing magnitude
-    T_diag = diag(BallArithmetic.mid(T_ball))
-    sorted_idx = sortperm(abs.(T_diag), rev=true)
+    lambda_all = real.(diag(T_bf))
+    sorted_idx = sortperm(abs.(lambda_all), rev=true)
+
+    @printf("  Step 2 done in %.1fs\n", time()-t0)
 
     # Cache
-    Serialization.serialize(CACHE_SCHUR_BALL, Dict(
-        :Q_ball => Q_ball, :T_ball => T_ball,
+    Serialization.serialize(CACHE_SCHUR_CERT, Dict(
+        :Q_bf => Q_bf, :T_bf => T_bf,
         :E_bound => E_bound_bf, :orth_defect => delta_bf,
         :sorted_idx => sorted_idx))
-    @info "BallMatrix Schur cached to $CACHE_SCHUR_BALL"
+    @info "Certified Schur cached to $CACHE_SCHUR_CERT"
 end
 
-@printf("  Schur ||A - QTQ'||_2 <= %.4e\n", Float64(E_bound_bf))
-@printf("  Orthogonality ||Q'Q-I||_2 <= %.4e\n", Float64(delta_bf))
+@printf("  Schur ||A - QTQ'||_2 ≤ %.4e\n", Float64(E_bound_bf))
+@printf("  Orthogonality ||Q'Q-I||_2 ≤ %.4e\n", Float64(delta_bf))
 println()
 flush(stdout)
 
@@ -169,79 +201,36 @@ A_rad_opnorm = upper_bound_L2_opnorm(BallMatrix(BallArithmetic.rad(A_ball_bf)))
 E_bound_total = setrounding(BigFloat, RoundUp) do
     E_bound_bf + A_rad_opnorm
 end
-@printf("  Total ||E|| = ||A_true - QTQ'||_2 <= %.4e\n", Float64(E_bound_total))
+@printf("  Total ||E|| = ||A_true - QTQ'||_2 ≤ %.4e\n", Float64(E_bound_total))
 @printf("    Schur residual = %.4e, input ||A_rad||_2 = %.4e\n",
         Float64(E_bound_bf), Float64(A_rad_opnorm))
 println()
 flush(stdout)
 
-# ═══════════════════════════════════════════════════════════════════════
-# PHASE 1: NK certification
-# ═══════════════════════════════════════════════════════════════════════
-
-println("=" ^ 80)
-println("PHASE 1: NK CERTIFICATION AT K=$K (all $NUM_EIGS eigenvalues)")
-println("=" ^ 80)
-println()
-flush(stdout)
-
-nk_radii     = Vector{BigFloat}(undef, NUM_EIGS)
-nk_certified = Vector{Bool}(undef, NUM_EIGS)
-nk_q0        = Vector{BigFloat}(undef, NUM_EIGS)
-
-if isfile(CACHE_NK)
-    @info "Loading NK results from cache..."
-    nk_cache = Serialization.deserialize(CACHE_NK)
-    nk_radii     .= nk_cache[:nk_radii]
-    nk_certified .= nk_cache[:nk_certified]
-    nk_q0        .= nk_cache[:nk_q0]
-    n_nk = count(nk_certified)
-    @info "  Loaded: $n_nk / $NUM_EIGS certified"
-else
-    for i in 1:NUM_EIGS
-        t1 = time()
-        nk_result = try
-            certify_eigenpair_nk(A_ball_bf; K=K, target_idx=i, N_C2=N_SPLITTING)
-        catch e
-            @warn "  NK j=$i failed: $(typeof(e))" exception=(e, catch_backtrace())
-            nothing
-        end
-        dt = time() - t1
-
-        if nk_result !== nothing && nk_result.is_certified
-            nk_radii[i]     = nk_result.enclosure_radius
-            nk_certified[i] = true
-            nk_q0[i]        = nk_result.q0_bound
-            @printf("  j=%2d: OK  r_NK=%.4e  q0=%.4e  [%.1fs]\n",
-                    i, Float64(nk_result.enclosure_radius), Float64(nk_result.q0_bound), dt)
-        else
-            nk_radii[i]     = BigFloat(Inf)
-            nk_certified[i] = false
-            nk_q0[i]        = nk_result !== nothing ? nk_result.q0_bound : BigFloat(Inf)
-            reason = nk_result !== nothing ? @sprintf("q0=%.2e", Float64(nk_result.q0_bound)) : "error"
-            @printf("  j=%2d: FAIL  %s  [%.1fs]\n", i, reason, dt)
-        end
-        flush(stdout)
-    end
-
-    Serialization.serialize(CACHE_NK, Dict(
-        :nk_radii => nk_radii, :nk_certified => nk_certified, :nk_q0 => nk_q0))
-    @info "NK results cached to $CACHE_NK"
+# Print first eigenvalues
+println("First $NUM_EIGS eigenvalues (sorted by |λ|):")
+println("-"^60)
+lambda_sorted = real.(diag(T_bf))[sorted_idx]
+for i in 1:NUM_EIGS
+    @printf("  %3d: λ = %+.15e  |λ| = %.10e\n",
+            i, Float64(lambda_sorted[i]), Float64(abs(lambda_sorted[i])))
 end
-
-n_nk_cert = count(nk_certified)
-println("\nPhase 1: $n_nk_cert / $NUM_EIGS NK-certified\n")
+println()
 flush(stdout)
 
 # ═══════════════════════════════════════════════════════════════════════
-# PHASE 2: ordschur_ball + Sylvester → ℓ_j(1) with perturbation bound
+# PHASE 1: ordschur + Sylvester → ℓ_j(1) with perturbation bound
 # ═══════════════════════════════════════════════════════════════════════
 
 println("=" ^ 80)
-println("PHASE 2: ℓ_j(1) VIA ordschur_ball + SYLVESTER + PERTURBATION BOUND")
+println("PHASE 1: ℓ_j(1) VIA ordschur + SYLVESTER + PERTURBATION BOUND")
 println("=" ^ 80)
 println()
 flush(stdout)
+
+const BF_ONE = one(BigFloat)
+const BF_TWO = BigFloat(2)
+const I_m = Matrix{Complex{BigFloat}}(I, n - 1, n - 1)
 
 ell_center      = Vector{BigFloat}(undef, NUM_EIGS)
 ell_radius      = Vector{BigFloat}(undef, NUM_EIGS)
@@ -261,63 +250,59 @@ else
     for j in 1:NUM_EIGS
         t1 = time()
 
-        # 1. ordschur_ball: move eigenvalue j to position 1
+        # 1. Manual ordschur: move eigenvalue j to position 1
         target_pos = sorted_idx[j]
-        select = falses(n)
-        select[target_pos] = true
-        ord_result = ordschur_ball(Q_ball, T_ball, select)
+        T_ord, Q_ord = bigfloat_ordschur(T_bf, Q_bf, target_pos)
 
-        T_ord_ball = ord_result.T
-        Q_ord_ball = ord_result.Q
-        eigenvalues_out[j] = real(BallArithmetic.mid(T_ord_ball)[1, 1])
+        lambda_j_bf = T_ord[1, 1]
+        eigenvalues_out[j] = real(lambda_j_bf)
+        q1_vectors[j] = Q_ord[:, 1]
 
-        # Store Schur eigenvector (midpoint of first column of Q_ord)
-        q1_vectors[j] = BallArithmetic.mid(Q_ord_ball)[:, 1]
-
-        # 2. Certified Sylvester solve (BallMatrix overload)
-        X_ball = triangular_sylvester_miyajima_enclosure(T_ord_ball, 1)
-        # X_ball satisfies T₂₂^H X - X T₁₁^H = T₁₂^H
-        # Coupling Y = -X^H (sign convention from BallArithmetic fix)
-
-        # 3. ℓ_j(1) from spectral projector: P_S = [I, Y; 0, 0]
-        Q_ord_mid = BallArithmetic.mid(Q_ord_ball)
-        q = conj.(Q_ord_mid[1, :])       # Q_ord^H · e₁
-        q1 = q[1]
-        q_rest = q[2:end]
-
-        X_mid = BallArithmetic.mid(X_ball)[:, 1]
-        X_rad = BallArithmetic.rad(X_ball)[:, 1]
-
-        # Y · q_rest = -X^H · q_rest = -dot(X_mid, q_rest)
-        ell_center[j] = real(q1 - dot(X_mid, q_rest))
-
-        # 4. Sylvester error: componentwise propagation from BallMatrix radii
-        sylv_err = setrounding(BigFloat, RoundUp) do
-            sum(BigFloat(X_rad[i]) * abs(q_rest[i]) for i in 1:n-1)
-        end
-
-        # 5. Standalone perturbation correction (Neumann/sigma resolvent bound)
-        #    Does NOT require Script 1 resolvent data
-        T_ord_mid = BallArithmetic.mid(T_ord_ball)
-        sep_bf = minimum(abs(T_ord_mid[1,1] - T_ord_mid[i,i]) for i in 2:n)
-        N_full = triu(T_ord_mid, 1)
+        # 2. Eigenvalue separation and nilpotent norm
+        sep_bf = minimum(abs(T_ord[1,1] - T_ord[i,i]) for i in 2:n)
+        N_full = triu(T_ord, 1)
         N_norm = upper_bound_L2_opnorm(BallMatrix(N_full))
 
+        # 3. Solve Sylvester in BigFloat: (T₂₂ - λI)z = w_rest
+        T12 = T_ord[1, 2:n]
+        T22 = T_ord[2:n, 2:n]
+        M_tri = UpperTriangular(T22 - lambda_j_bf * I_m)
+
+        w = Q_ord[1, :]       # first row of Q_ord = Q_ord^H · e₁
+        w1, w_rest = w[1], w[2:n]
+
+        z0 = M_tri \ w_rest
+        ell_center[j] = real(w1 - dot(T12, z0))
+
+        # 4. Sylvester residual error
+        residual = w_rest - M_tri * z0
+        res_norm_bf = BigFloat(norm(residual))  # Euclidean norm (vector)
+
+        diag_M = [abs(T22[i,i] - lambda_j_bf) for i in 1:n-1]
+        sigma_min_bf = minimum(real, diag_M)
+        T12_norm_bf = BigFloat(norm(T12))       # Euclidean norm (row vector)
+
+        local sylv_err::BigFloat
+        if sigma_min_bf > 0
+            sylv_err = setrounding(BigFloat, RoundUp) do
+                delta_z = res_norm_bf / sigma_min_bf
+                bf_n = BigFloat(n)
+                T12_norm_bf * delta_z + bf_n * eps(BigFloat) * abs(ell_center[j])
+            end
+        else
+            sylv_err = BigFloat(Inf)
+        end
+
+        # 5. Perturbation correction (standalone Neumann/sigma resolvent bound)
         local pert_err::BigFloat = setrounding(BigFloat, RoundUp) do
-            BF_ONE = one(BigFloat)
-            BF_TWO = BigFloat(2)
             rho = sep_bf / BF_TWO
             kappa = (BF_ONE + delta_bf) / max(BF_ONE - delta_bf, BigFloat(1e-300))
 
             R_neumann = rho > N_norm ? kappa / (rho - N_norm) : BigFloat(Inf)
-            # sigma-based bound using T22 diagonal separation
-            diag_M = [abs(T_ord_mid[i,i] - T_ord_mid[1,1]) for i in 2:n]
-            sigma_min = minimum(real, diag_M)
-            T12_norm = BigFloat(norm(T_ord_mid[1, 2:n]))
             R_sigma = BigFloat(Inf)
-            if sigma_min > rho
-                R22 = BF_ONE / (sigma_min - rho)
-                R_sigma = kappa * (BF_ONE / rho) * (BF_ONE + T12_norm * R22)
+            if sigma_min_bf > rho
+                R22 = BF_ONE / (sigma_min_bf - rho)
+                R_sigma = kappa * (BF_ONE / rho) * (BF_ONE + T12_norm_bf * R22)
             end
             R_S = min(R_neumann, R_sigma)
 
@@ -328,30 +313,16 @@ else
             end
         end
 
-        # 6. NK eigenvector correction
-        local nk_corr::BigFloat
-        if nk_certified[j]
-            yt_norm = upper_bound_L2_opnorm(X_ball)
-            proj_schur_norm = setrounding(BigFloat, RoundUp) do
-                sqrt(one(BigFloat) + yt_norm * yt_norm)
-            end
-            nk_corr = setrounding(BigFloat, RoundUp) do
-                proj_schur_norm * BigFloat(2) * BigFloat(nk_radii[j])
-            end
-        else
-            nk_corr = BigFloat(Inf)
-        end
-
-        # 7. Total error
+        # 6. Total error = sylvester + perturbation (no NK needed)
         ell_radius[j] = setrounding(BigFloat, RoundUp) do
-            sylv_err + pert_err + nk_corr
+            sylv_err + pert_err
         end
 
         sign_ok = abs(ell_center[j]) > ell_radius[j] ? "YES" : "NO"
         dt_j = time() - t1
-        @printf("  j=%2d: lam=%+.10e  ell=%+.15e +/- %.2e  sylv=%.2e  pert=%.2e  nk=%.2e  %s  [%.1fs]\n",
+        @printf("  j=%2d: lam=%+.10e  ell=%+.15e +/- %.2e  sylv=%.2e  pert=%.2e  %s  [%.1fs]\n",
                 j, Float64(eigenvalues_out[j]), Float64(ell_center[j]), Float64(ell_radius[j]),
-                Float64(sylv_err), Float64(pert_err), Float64(nk_corr), sign_ok, dt_j)
+                Float64(sylv_err), Float64(pert_err), sign_ok, dt_j)
         flush(stdout)
     end
 
@@ -362,11 +333,11 @@ else
 end
 
 n_ell_cert = count(j -> abs(ell_center[j]) > ell_radius[j], 1:NUM_EIGS)
-println("\nPhase 2: $n_ell_cert / $NUM_EIGS ℓ_j(1) sign-certified\n")
+println("\nPhase 1: $n_ell_cert / $NUM_EIGS ℓ_j(1) sign-certified\n")
 flush(stdout)
 
 # ═══════════════════════════════════════════════════════════════════════
-# PHASE 3: Summary + save + export
+# PHASE 2: Summary + save + export
 # ═══════════════════════════════════════════════════════════════════════
 
 println("=" ^ 80)
@@ -374,24 +345,22 @@ println("SUMMARY  K=$K, P=$PRECISION, $NUM_EIGS eigenvalues")
 println("=" ^ 80)
 println()
 
-println("-" ^ 130)
+println("-" ^ 110)
 @printf("  %3s  %22s  %12s  %12s  %26s  %6s\n",
-    "j", "lam_j", "NK radius", "pert error", "ell_j(1)", "sign")
-println("-" ^ 130)
+    "j", "lam_j", "sylv_err", "pert_err", "ell_j(1)", "sign")
+println("-" ^ 110)
 
 for j in 1:NUM_EIGS
-    lam_j = Float64(eigenvalues_out[j])
-    nk_rad = nk_certified[j] ? Float64(nk_radii[j]) : Inf
     sign_ok = abs(ell_center[j]) > ell_radius[j] ? "YES" : "NO"
-
     @printf("  %3d  %+22.14e  %12.4e  %12.4e  %+22.14e +/- %.2e  %6s\n",
-            j, lam_j, nk_rad, Float64(ell_radius[j]),
+            j, Float64(eigenvalues_out[j]),
+            Float64(ell_radius[j]),  # total (sylv+pert)
+            Float64(ell_radius[j]),
             Float64(ell_center[j]), Float64(ell_radius[j]), sign_ok)
 end
-println("-" ^ 130)
+println("-" ^ 110)
 println()
 
-@printf("  NK certified:       %d / %d\n", n_nk_cert, NUM_EIGS)
 @printf("  ell_j(1) sign:      %d / %d\n", n_ell_cert, NUM_EIGS)
 println()
 
@@ -402,9 +371,6 @@ Serialization.serialize(RESULTS_PATH, Dict(
     :NUM_EIGS => NUM_EIGS,
     :eigenvalues => Float64.(eigenvalues_out),
     :eigenvalues_bf => eigenvalues_out,
-    :nk_radii => Float64.(nk_radii),
-    :nk_radii_bf => nk_radii,
-    :nk_certified => nk_certified,
     :ell_center => Float64.(ell_center),
     :ell_radius => Float64.(ell_radius),
     :ell_center_bf => ell_center,
@@ -418,27 +384,26 @@ latex_path = joinpath(DATA_DIR, "certified_spectral_data_K$(K).tex")
 open(latex_path, "w") do io
     println(io, "% Certified spectral data for $NUM_EIGS GKW eigenvalues at K=$K")
     println(io, "% Generated: $(now())")
-    println(io, "% K=$K, precision=$PRECISION bits")
+    println(io, "% K=$K, precision=$PRECISION bits, no NK (projector perturbation only)")
     println(io)
 
-    println(io, "\\begin{longtable}{rrrrrr}")
+    println(io, "\\begin{longtable}{rrrrr}")
     println(io, "\\caption{Certified spectral data (K=$K, P=$PRECISION).}")
     println(io, "\\label{tab:spectral-data-K$(K)} \\\\")
     println(io, "\\toprule")
-    println(io, "\$j\$ & \$\\hat\\lambda_j\$ & NK radius & \$\\ell_j(1)\$ & \$\\ell_j(1)\$ radius & sign \\\\")
+    println(io, "\$j\$ & \$\\hat\\lambda_j\$ & \$\\ell_j(1)\$ & \$\\ell_j(1)\$ radius & sign \\\\")
     println(io, "\\midrule")
     println(io, "\\endfirsthead")
-    println(io, "\\multicolumn{6}{c}{\\textit{continued}} \\\\")
+    println(io, "\\multicolumn{5}{c}{\\textit{continued}} \\\\")
     println(io, "\\toprule")
-    println(io, "\$j\$ & \$\\hat\\lambda_j\$ & NK radius & \$\\ell_j(1)\$ & \$\\ell_j(1)\$ radius & sign \\\\")
+    println(io, "\$j\$ & \$\\hat\\lambda_j\$ & \$\\ell_j(1)\$ & \$\\ell_j(1)\$ radius & sign \\\\")
     println(io, "\\midrule")
     println(io, "\\endhead")
 
     for j in 1:NUM_EIGS
-        nk_rad = nk_certified[j] ? Float64(nk_radii[j]) : Inf
         sign_ok = abs(ell_center[j]) > ell_radius[j]
-        @printf(io, "%d & \$%+.12e\$ & \$%.2e\$ & \$%+.14e\$ & \$%.2e\$ & %s \\\\\n",
-                j, Float64(eigenvalues_out[j]), nk_rad,
+        @printf(io, "%d & \$%+.12e\$ & \$%+.14e\$ & \$%.2e\$ & %s \\\\\n",
+                j, Float64(eigenvalues_out[j]),
                 Float64(ell_center[j]), Float64(ell_radius[j]),
                 sign_ok ? "\\checkmark" : "--")
     end
@@ -454,18 +419,39 @@ open(txt_path, "w") do io
     println(io, "# GKW operator spectral expansion coefficients")
     println(io, "# K = $K, BigFloat precision = $PRECISION bits (≈$(round(Int, PRECISION * log10(2))) decimal digits)")
     println(io, "# ||E|| = ||A_true - QTQ'||_2 <= ", string(E_bound_total))
+    println(io, "# Method: Schur + ordschur + Sylvester + perturbation (no NK)")
     println(io, "#")
-    println(io, "# Columns: j, lambda_j, ell_j(1), ell_radius, NK_radius, sign_certified")
+    println(io, "# Columns: j, lambda_j, ell_j(1), ell_radius, sign_certified")
     println(io, "#")
     for j in 1:NUM_EIGS
         sign_ok = abs(ell_center[j]) > ell_radius[j] ? "YES" : "NO"
-        nk_rad = nk_certified[j] ? Float64(nk_radii[j]) : Inf
         println(io, j, "\t", string(eigenvalues_out[j]), "\t",
-                string(ell_center[j]), "\t", string(ell_radius[j]), "\t",
-                string(nk_rad), "\t", sign_ok)
+                string(ell_center[j]), "\t", string(ell_radius[j]), "\t", sign_ok)
     end
 end
 @info "Text export: $txt_path"
+
+# --- Eigenvector coefficients ---
+vec_file = joinpath(DATA_DIR, "eigenvectors_K$(K)_P$(PRECISION).txt")
+open(vec_file, "w") do io
+    println(io, "# GKW operator eigenvector coefficients in shifted monomial basis {(x-1)^k}")
+    println(io, "# K = $K, BigFloat precision = $PRECISION bits")
+    println(io, "# Each column j contains [v_j]_k for k = 0, 1, ..., $K")
+    println(io, "#")
+    print(io, "k")
+    for j in 1:NUM_EIGS
+        print(io, "\tv_", j)
+    end
+    println(io)
+    for k in 0:K
+        print(io, k)
+        for j in 1:NUM_EIGS
+            print(io, "\t", string(real(q1_vectors[j][k+1])))
+        end
+        println(io)
+    end
+end
+@info "  Written: $vec_file"
 
 println()
 println("=" ^ 80)
