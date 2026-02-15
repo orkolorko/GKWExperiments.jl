@@ -142,13 +142,17 @@ else
     if isfile(CACHE_SCHUR_K256)
         @info "Loading GenericSchur seed from $CACHE_SCHUR_K256..."
         sd_bf = Serialization.deserialize(CACHE_SCHUR_K256)
-        schur_seed = (Complex{BigFloat}.(sd_bf[1].Z), Complex{BigFloat}.(sd_bf[1].T))
+        # Use real parts of GenericSchur seed — all GKW eigenvalues are real,
+        # so Q and T from GenericSchur are essentially real (imag parts ~ 0).
+        # Keeping Complex{BigFloat} causes refine_schur_decomposition to do
+        # complex arithmetic, which diverges (residual ~2e-153 > target_tol
+        # triggers 20 Newton-Schulz iterations that corrupt the good seed).
+        Q0_bf = Complex{BigFloat}.(sd_bf[1].Z)
+        T0_bf = Complex{BigFloat}.(sd_bf[1].T)
+        @info "  GenericSchur seed imaginary parts: Q=$(maximum(abs.(imag.(Q0_bf)))), T=$(maximum(abs.(imag.(T0_bf))))"
+        schur_seed = (real.(Q0_bf), real.(T0_bf))
     end
 
-    # WORKAROUND: rigorous_schur_bigfloat's imaginary stripping (79c06d5)
-    # doesn't trigger for GKW because max(|imag|) ≈ max(rad) from Arb→BigFloat.
-    # Refine against real(A_mid) directly, then certify against full A_ball_bf.
-    # This gives Schur residual ~2e-153 (vs 2.8e-24 from complex refinement).
     @info "Computing rigorous BallMatrix Schur decomposition..."
     t0 = time()
     A_real_center = real.(BallArithmetic.mid(A_ball_bf))
@@ -159,7 +163,7 @@ else
     else
         F = schur(convert.(ComplexF64, A_real_center))
         schur_result = refine_schur_decomposition(
-            A_real_center, F.Z, F.T;
+            A_real_center, real.(BigFloat.(F.Z)), real.(BigFloat.(F.T));
             target_precision=PRECISION, max_iterations=20)
     end
     Q_ball, T_ball = certify_schur_decomposition(A_ball_bf, schur_result)
