@@ -1,0 +1,11 @@
+# Rigorous tail bound for spectral expansion remainder R_50(n)
+# ‖R_50(n)‖₂ ≤ ρ^{n+1} · M_∞ · ‖Q_50 · 1‖
+# Resolvent from full_certification_50eigs.jl (Phase 3)
+# Tail projection from K=512, P=1024
+
+rho_tail	1.014211211094125e-21
+M_inf	6.061705280481548e+41
+norm_Q_N_1	6.138280910626505e-21
+prefactor	3.720844980902377e+21
+eps_K	4.652646472415007e-90
+lambda_50	-1.468398058165576e-21

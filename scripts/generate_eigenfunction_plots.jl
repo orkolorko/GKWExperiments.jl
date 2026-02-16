@@ -1,22 +1,48 @@
 #!/usr/bin/env julia
-# Generate eigenfunction and spectral approximant plots from cached data.
-# Produces 5 PDF figures in data/:
-#   eigenfunctions_1_6.pdf          — leading 6 eigenfunctions
-#   eigenfunctions_7_12.pdf         — higher eigenfunctions 7–12
-#   eigenfunctions_7_12_overlay.pdf — v_7–v_12 overlaid on same axes
-#   spectral_approximant.pdf        — L^n 1 for several n
-#   spectral_convergence.pdf        — convergence to invariant density
+# Generate eigenfunction plots from K=512 spectral data.
+# Produces eigenfunction batch plots (10 per figure) + spectral approximant + convergence.
+#
+# Usage:
+#   julia --project --startup-file=no scripts/generate_eigenfunction_plots.jl
 
-using Serialization, CairoMakie, Printf
+using CairoMakie, Printf, DelimitedFiles
 
 # ──────────────────────────────────────────────────────────────────────
-# Load cached spectral data
+# Load K=512 eigenvector and spectral coefficient data from text files
 # ──────────────────────────────────────────────────────────────────────
-data = deserialize("data/spectral_results_K256.jls")
 
-eigenvalues  = data[:eigenvalues]       # 20 Float64
-eigenvectors = data[:eigenvectors]      # 257×20 Float64 (shifted monomial coeffs)
-ell_center   = data[:ell_center]        # 20 Float64
+const DATA_DIR = joinpath(@__DIR__, "..", "data")
+const NUM_EIGS = 50
+
+# Parse eigenvector file: tab-separated, first column = k, then v_1 ... v_50
+println("Loading eigenvector data...")
+evec_lines = readlines(joinpath(DATA_DIR, "eigenvectors_K512_P1024.txt"))
+evec_data_lines = filter(l -> !startswith(l, "#") && !startswith(l, "k"), evec_lines)
+K_plus_1 = length(evec_data_lines)
+eigenvectors = zeros(K_plus_1, NUM_EIGS)
+for (i, line) in enumerate(evec_data_lines)
+    parts = split(line, '\t')
+    for j in 1:NUM_EIGS
+        eigenvectors[i, j] = parse(Float64, parts[j + 1])
+    end
+end
+println("  Loaded $(K_plus_1) coefficients × $NUM_EIGS eigenvectors")
+
+# Parse spectral coefficients file
+println("Loading spectral coefficient data...")
+coeff_lines = readlines(joinpath(DATA_DIR, "spectral_coefficients_K512_P1024.txt"))
+eigenvalues = zeros(NUM_EIGS)
+ell_center = zeros(NUM_EIGS)
+for line in coeff_lines
+    startswith(line, "#") && continue
+    parts = split(line, '\t')
+    length(parts) >= 4 || continue
+    j = parse(Int, parts[1])
+    j > NUM_EIGS && continue
+    eigenvalues[j] = parse(Float64, parts[2])
+    ell_center[j] = parse(Float64, parts[3])
+end
+println("  Loaded $NUM_EIGS eigenvalues and ℓ_j(1) coefficients")
 
 # ──────────────────────────────────────────────────────────────────────
 # Evaluation on [0.01, 0.99]
@@ -42,8 +68,7 @@ function eval_eigenfunction(j::Int)
 end
 
 """Evaluate spectral approximant S_N(n, x) = Σ λ_j^n ℓ_j(1) v_j(x)."""
-function eval_spectral_approximant(n::Int)
-    N = length(eigenvalues)
+function eval_spectral_approximant(n::Int; N=NUM_EIGS)
     vals = zeros(length(x_pts))
     for j in 1:N
         vj = eval_eigenfunction(j)
@@ -54,84 +79,128 @@ function eval_spectral_approximant(n::Int)
 end
 
 # ──────────────────────────────────────────────────────────────────────
-# Figure 1: Leading eigenfunctions v_1 … v_6  (2×3 grid)
+# Eigenfunction batch plots: 5 figures × 10 eigenfunctions (2×5 grid)
 # ──────────────────────────────────────────────────────────────────────
-println("Generating eigenfunctions_1_6.pdf …")
 
-fig1 = Figure(size=(900, 550), fontsize=11)
-for idx in 1:6
-    row, col = divrem(idx - 1, 3) .+ (1, 1)
-    λ = eigenvalues[idx]
-    ℓ = ell_center[idx]
-    title = @sprintf("v_%d   (λ = %.4f, ℓ = %+.3f)", idx, λ, ℓ)
-    ax = Axis(fig1[row, col]; xlabel="x", ylabel="v_$(idx)(x)", title)
-    y = eval_eigenfunction(idx)
-    lines!(ax, collect(x_pts), y; color=:steelblue, linewidth=1.5)
-    hlines!(ax, [0.0]; color=:gray70, linestyle=:dash, linewidth=0.5)
+batch_ranges = [1:10, 11:20, 21:30, 31:40, 41:50]
+
+for batch in batch_ranges
+    j_start, j_end = first(batch), last(batch)
+    fname = "eigenfunctions_$(j_start)_$(j_end).pdf"
+    println("Generating $fname …")
+
+    fig = Figure(size=(1200, 500), fontsize=10)
+    for (i, idx) in enumerate(batch)
+        row, col = divrem(i - 1, 5) .+ (1, 1)
+        λ = eigenvalues[idx]
+        ℓ = ell_center[idx]
+
+        # Adaptive title formatting
+        if abs(λ) >= 0.01
+            title = @sprintf("v_%d  (λ=%.4f, ℓ=%+.3f)", idx, λ, ℓ)
+        elseif abs(λ) >= 1e-6
+            title = @sprintf("v_%d  (λ=%.2e, ℓ=%+.2e)", idx, λ, ℓ)
+        else
+            title = @sprintf("v_%d  (λ=%.1e, ℓ=%+.1e)", idx, λ, ℓ)
+        end
+
+        ax = Axis(fig[row, col]; xlabel="x", ylabel="v_$(idx)(x)", title,
+                  titlesize=9)
+        y = eval_eigenfunction(idx)
+        lines!(ax, collect(x_pts), y; color=:steelblue, linewidth=1.2)
+        hlines!(ax, [0.0]; color=:gray70, linestyle=:dash, linewidth=0.5)
+    end
+    save(joinpath(DATA_DIR, fname), fig)
+    println("  → data/$fname")
 end
-save("data/eigenfunctions_1_6.pdf", fig1)
-println("  → data/eigenfunctions_1_6.pdf")
 
 # ──────────────────────────────────────────────────────────────────────
-# Figure 2: Higher eigenfunctions v_7 … v_12  (2×3 grid)
+# Overlay plots: 10-by-10 batches with zoomed x-range + Markov partition
+#   Each batch zooms into the region where the eigenfunctions have
+#   fine structure, with the corresponding Markov cylinders shown.
 # ──────────────────────────────────────────────────────────────────────
-println("Generating eigenfunctions_7_12.pdf …")
 
-fig2 = Figure(size=(900, 550), fontsize=11)
-for idx in 7:12
-    row, col = divrem(idx - 7, 3) .+ (1, 1)
-    λ = eigenvalues[idx]
-    ℓ = ell_center[idx]
-    title = @sprintf("v_%d   (λ = %.6f, ℓ = %+.4f)", idx, λ, ℓ)
-    ax = Axis(fig2[row, col]; xlabel="x", ylabel="v_$(idx)(x)", title)
-    y = eval_eigenfunction(idx)
-    lines!(ax, collect(x_pts), y; color=:steelblue, linewidth=1.5)
-    hlines!(ax, [0.0]; color=:gray70, linestyle=:dash, linewidth=0.5)
+overlay_colors = [:steelblue, :firebrick, :seagreen, :darkorange, :purple4,
+                  :goldenrod, :deeppink, :teal, :sienna, :slateblue]
+
+# (batch, x_range, Markov partition n-range)
+overlay_specs = [
+    (1:10,   (0.01,  0.99),  2:10),    # full interval, cylinders [1/2,1]...[1/10,1/9]
+    (11:20,  (0.01,  0.5),   10:20),   # zoom to [0, 1/2], cylinders n=10..20
+    (21:30,  (0.005, 0.25),  20:30),   # zoom to [0, 1/4], cylinders n=20..30
+    (31:40,  (0.003, 0.125), 30:40),   # zoom to [0, 1/8], cylinders n=30..40
+    (41:50,  (0.002, 0.1),   40:50),   # zoom to [0, 1/10], cylinders n=40..50
+]
+
+for (batch, (x_lo, x_hi), markov_range) in overlay_specs
+    j_start, j_end = first(batch), last(batch)
+    fname = "eigenfunctions_$(j_start)_$(j_end)_overlay.pdf"
+    println("Generating $fname …")
+
+    x_ov = range(x_lo, x_hi, length=500)
+
+    fig_ov = Figure(size=(900, 500), fontsize=12)
+    ax_ov = Axis(fig_ov[1, 1];
+        xlabel="x", ylabel="v_j(x)",
+        title="Eigenfunctions v_$(j_start) – v_$(j_end)  (x ∈ [$(@sprintf("%.3g", x_lo)), $(@sprintf("%.3g", x_hi))])")
+
+    for (i, idx) in enumerate(batch)
+        y = [eval_poly(@view(eigenvectors[:, idx]), x) for x in x_ov]
+        lines!(ax_ov, collect(x_ov), y;
+            color=overlay_colors[i], linewidth=1.3,
+            label=@sprintf("v_%d", idx))
+    end
+    hlines!(ax_ov, [0.0]; color=:gray70, linestyle=:dash, linewidth=0.5)
+
+    # Markov partition: x = 1/n for the relevant cylinders
+    for n in markov_range
+        xn = 1.0 / n
+        if x_lo < xn < x_hi
+            vlines!(ax_ov, [xn]; color=:gray30, linestyle=:dot, linewidth=0.7)
+        end
+    end
+
+    axislegend(ax_ov; position=:lt, nbanks=2, framevisible=false, labelsize=9)
+    save(joinpath(DATA_DIR, fname), fig_ov)
+    println("  → data/$fname")
 end
-save("data/eigenfunctions_7_12.pdf", fig2)
-println("  → data/eigenfunctions_7_12.pdf")
 
 # ──────────────────────────────────────────────────────────────────────
-# Figure 2b: v_4 … v_20 overlaid on same axes with Markov partition
+# Overlay plot: all 50 eigenfunctions on same axes
 # ──────────────────────────────────────────────────────────────────────
-println("Generating eigenfunctions_4_20_overlay.pdf …")
+println("Generating eigenfunctions_all_overlay.pdf …")
 
-fig2b = Figure(size=(900, 500), fontsize=12)
-ax2b = Axis(fig2b[1, 1];
+fig_ov = Figure(size=(900, 500), fontsize=12)
+ax_ov = Axis(fig_ov[1, 1];
     xlabel="x", ylabel="v_j(x)",
-    title="Eigenfunctions v_4 – v_20 with Gauss map Markov partition")
+    title="Eigenfunctions v_1 – v_50 with Gauss map Markov partition")
 
-# 17 functions need distinguishable colors
-colors2b = Makie.wong_colors()
-n_funcs = 17
-for (i, idx) in enumerate(4:20)
+colors_ov = Makie.wong_colors()
+for idx in 1:NUM_EIGS
     y = eval_eigenfunction(idx)
-    label = @sprintf("v_%d", idx)
-    lines!(ax2b, collect(x_pts), y;
-        color=colors2b[mod1(i, length(colors2b))],
-        linewidth=(i <= 7 ? 1.5 : 0.9),
-        label=label)
+    lines!(ax_ov, collect(x_pts), y;
+        color=colors_ov[mod1(idx, length(colors_ov))],
+        linewidth=(idx <= 6 ? 1.5 : 0.7))
 end
-hlines!(ax2b, [0.0]; color=:gray70, linestyle=:dash, linewidth=0.5)
+hlines!(ax_ov, [0.0]; color=:gray70, linestyle=:dash, linewidth=0.5)
 
-# Markov partition: vertical lines at x = 1/n for n = 2, 3, 4, …
+# Markov partition
 for n in 2:10
-    vlines!(ax2b, [1.0 / n]; color=:gray30, linestyle=:dot, linewidth=0.7)
+    vlines!(ax_ov, [1.0 / n]; color=:gray30, linestyle=:dot, linewidth=0.7)
 end
 
-axislegend(ax2b; position=:lt, nbanks=3, framevisible=false, labelsize=9)
-save("data/eigenfunctions_4_20_overlay.pdf", fig2b)
-println("  → data/eigenfunctions_4_20_overlay.pdf")
+save(joinpath(DATA_DIR, "eigenfunctions_all_overlay.pdf"), fig_ov)
+println("  → data/eigenfunctions_all_overlay.pdf")
 
 # ──────────────────────────────────────────────────────────────────────
-# Figure 3: Spectral approximant  S_20(n, x)  for n = 0, 1, 2, 5, 10
+# Spectral approximant  S_50(n, x)  for n = 0, 1, 2, 5, 10
 # ──────────────────────────────────────────────────────────────────────
 println("Generating spectral_approximant.pdf …")
 
 fig3 = Figure(size=(700, 450), fontsize=12)
 ax3 = Axis(fig3[1, 1];
-    xlabel="x", ylabel="S₂₀(n, x)",
-    title="Spectral approximant  L^n 1  via 20 eigenvalues")
+    xlabel="x", ylabel="S₅₀(n, x)",
+    title="Spectral approximant  L^n 1  via 50 eigenvalues")
 
 colors3 = [:gray50, :steelblue, :firebrick, :darkorange, :purple4]
 n_vals = [0, 1, 2, 5, 10]
@@ -142,21 +211,19 @@ for (i, n) in enumerate(n_vals)
         color=colors3[i], linewidth=1.5, label="n = $n")
 end
 axislegend(ax3; position=:rt)
-save("data/spectral_approximant.pdf", fig3)
+save(joinpath(DATA_DIR, "spectral_approximant.pdf"), fig3)
 println("  → data/spectral_approximant.pdf")
 
 # ──────────────────────────────────────────────────────────────────────
-# Figure 4: Convergence to invariant density
-#   Plot S_20(n,x) / λ₁^n for several n → ℓ₁(1) v₁(x)
+# Convergence to invariant density
 # ──────────────────────────────────────────────────────────────────────
 println("Generating spectral_convergence.pdf …")
 
 fig4 = Figure(size=(700, 450), fontsize=12)
 ax4 = Axis(fig4[1, 1];
-    xlabel="x", ylabel="S₂₀(n, x) / λ₁ⁿ",
-    title="Convergence of  S₂₀(n, x) / λ₁ⁿ  to  ℓ₁(1) v₁(x)")
+    xlabel="x", ylabel="S₅₀(n, x) / λ₁ⁿ",
+    title="Convergence of  S₅₀(n, x) / λ₁ⁿ  to  ℓ₁(1) v₁(x)")
 
-# The limit: ℓ₁(1) v₁(x)
 y_limit = ell_center[1] .* eval_eigenfunction(1)
 
 n_conv = [0, 1, 2, 5, 10, 20]
@@ -168,12 +235,11 @@ for (i, n) in enumerate(n_conv)
         color=colors4[i], linewidth=1.2, label="n = $n")
 end
 
-# Plot the limit curve
 lines!(ax4, collect(x_pts), y_limit;
     color=:black, linewidth=2.5, linestyle=:dash, label="ℓ₁(1) v₁(x)")
 
 axislegend(ax4; position=:rt)
-save("data/spectral_convergence.pdf", fig4)
+save(joinpath(DATA_DIR, "spectral_convergence.pdf"), fig4)
 println("  → data/spectral_convergence.pdf")
 
 println("\nAll plots generated successfully.")
