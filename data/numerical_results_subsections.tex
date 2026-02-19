@@ -62,7 +62,9 @@ lifted to the infinite-dimensional one via Neumann perturbation:
 \;=:\; M_{\infty,j}.
 \]
 The full results are given in the supplementary material
-(Tables~\ref{S-tab:two-stage-results} and~\ref{S-tab:resolvent-bounds}).
+(Tables~\ref{S-tab:two-stage-results} and~\ref{S-tab:resolvent-bounds});
+all certified data are also available in machine-readable form
+in~\cite{NisoliGKWData2026}.
 All $50$ excluding circles are certified, proving that the first $50$
 eigenvalues of~$L$ are simple.
 
@@ -88,7 +90,7 @@ residual contributes~\eqref{eq:proj-bound-schur} and the ordschur
 reordering contributes~\eqref{eq:proj-bound-ord}.
 At $K = 256$, $\vartheta_j$ ranges from $1.01 \times 10^{-41}$ ($j = 1$)
 to $2.96 \times 10^{-3}$ ($j = 35$).  For $j \geq 36$, useful
-projector bounds require $K = 512$
+projector bounds require higher $K$; we use $K = 1024$
 (see supplementary Table~\ref{S-tab:two-stage-results}).
 
 Since each $\lambda_j$ is certified simple and $\vartheta_j < 1$,
@@ -179,7 +181,7 @@ resolvent on this circle.  For $N = 50$, the parameters are
 $\rho = 1.014 \times 10^{-21}$,
 $M_\infty = 6.062 \times 10^{41}$,
 and $\|Q_{50}\mathbf{1}\| \leq 6.138 \times 10^{-21}$
-(computed at $K = 512$), giving
+(computed at $K = 1024$), giving
 $\|R_{50}(n)\| \leq 3.72 \times 10^{21} \cdot (1.01 \times 10^{-21})^{n+1}$.
 Already at $n = 1$ the remainder is below $10^{-20}$; at $n = 5$ it drops
 below $10^{-104}$ (see supplementary Table~\ref{S-tab:tail-bounds-sample}).
