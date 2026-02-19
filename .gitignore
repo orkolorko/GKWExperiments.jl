@@ -17,3 +17,6 @@
 # Binary data files
 *.jld2
 *.jls
+
+# Dataverse archive (stored on Harvard Dataverse)
+data/dataverse/
