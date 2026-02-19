@@ -21,7 +21,7 @@ const NUM_EIGS = 50
 # ──────────────────────────────────────────────────────────────────────
 
 println("Loading eigenvector data...")
-evec_lines = readlines(joinpath(DATA_DIR, "eigenvectors_K512_P1024.txt"))
+evec_lines = readlines(joinpath(DATA_DIR, "eigenvectors_K1024_P2048.txt"))
 evec_data_lines = filter(l -> !startswith(l, "#") && !startswith(l, "k"), evec_lines)
 K_plus_1 = length(evec_data_lines)
 eigenvectors = zeros(K_plus_1, NUM_EIGS)
@@ -34,7 +34,7 @@ end
 println("  $K_plus_1 coefficients × $NUM_EIGS eigenvectors")
 
 println("Loading spectral coefficients...")
-coeff_lines = readlines(joinpath(DATA_DIR, "spectral_coefficients_K512_P1024.txt"))
+coeff_lines = readlines(joinpath(DATA_DIR, "spectral_coefficients_K1024_P2048.txt"))
 eigenvalues = zeros(NUM_EIGS)
 ell_center = zeros(NUM_EIGS)
 for line in coeff_lines

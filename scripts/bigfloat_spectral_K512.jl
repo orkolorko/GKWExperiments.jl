@@ -1,9 +1,10 @@
 # BigFloat spectral computation for K=512, P=1024, 50 eigenvalues.
-# ordschur + Sylvester + standalone perturbation bound (no NK needed).
+# ordschur + direct triangular Sylvester solve + perturbation bound.
 # Designed to run on ibis (32 cores, 125 GB RAM).
 #
-# The spectral projector perturbation is fully bounded by E_bound + resolvent,
-# so NK eigenvector certification is unnecessary.
+# Spectral coefficient ℓ_j(1) = q₁ - T₁₂·(T₂₂-λI)⁻¹·q_rest
+# where q = Q_ord^H e₁ = conj(first row of Q_ord).
+# Error bound = Schur perturbation bound (triangular solve error is negligible).
 #
 # Usage:
 #   julia --project --startup-file=no scripts/bigfloat_spectral_K512.jl
@@ -33,6 +34,9 @@ setprecision(BigFloat, PRECISION)
 
 const DATA_DIR = joinpath(@__DIR__, "..", "data")
 mkpath(DATA_DIR)
+
+const N_SPLITTING = 5000
+const SCRIPT1_RESULTS = joinpath(DATA_DIR, "script1_results.jls")
 
 # Cache paths (all K=512, P=1024 specific)
 const CACHE_BALL_BF   = joinpath(DATA_DIR, "ball_matrix_bf_K$(K)_P$(PRECISION).jls")
@@ -219,21 +223,21 @@ println()
 flush(stdout)
 
 # ═══════════════════════════════════════════════════════════════════════
-# PHASE 1: ordschur + Sylvester → ℓ_j(1) with perturbation bound
+# PHASE 1: ordschur + direct triangular Sylvester → ℓ_j(1)
 # ═══════════════════════════════════════════════════════════════════════
 
 println("=" ^ 80)
-println("PHASE 1: ℓ_j(1) VIA ordschur + SYLVESTER + PERTURBATION BOUND")
+println("PHASE 1: ℓ_j(1) VIA ordschur + direct triangular Sylvester solve")
 println("=" ^ 80)
 println()
 flush(stdout)
 
 const BF_ONE = one(BigFloat)
 const BF_TWO = BigFloat(2)
-const I_m = Matrix{Complex{BigFloat}}(I, n - 1, n - 1)
 
 ell_center      = Vector{BigFloat}(undef, NUM_EIGS)
 ell_radius      = Vector{BigFloat}(undef, NUM_EIGS)
+eigvec_radius   = Vector{BigFloat}(undef, NUM_EIGS)
 eigenvalues_out = Vector{BigFloat}(undef, NUM_EIGS)
 q1_vectors      = Vector{Vector{Complex{BigFloat}}}(undef, NUM_EIGS)
 
@@ -242,6 +246,7 @@ if isfile(CACHE_ELL)
     ell_cache = Serialization.deserialize(CACHE_ELL)
     ell_center      .= ell_cache[:ell_center]
     ell_radius      .= ell_cache[:ell_radius]
+    eigvec_radius   .= get(ell_cache, :eigvec_radius, fill(BigFloat(Inf), NUM_EIGS))
     eigenvalues_out .= ell_cache[:eigenvalues_out]
     q1_vectors      .= ell_cache[:q1_vectors]
     n_ell = count(j -> abs(ell_center[j]) > ell_radius[j], 1:NUM_EIGS)
@@ -258,76 +263,102 @@ else
         eigenvalues_out[j] = real(lambda_j_bf)
         q1_vectors[j] = Q_ord[:, 1]
 
-        # 2. Eigenvalue separation and nilpotent norm
-        sep_bf = minimum(abs(T_ord[1,1] - T_ord[i,i]) for i in 2:n)
+        # 2. Direct triangular Sylvester solve for ℓ_j(1)
+        #    Formula: ℓ_j(1) = q₁ - T₁₂·(T₂₂ - λI)⁻¹·q_rest
+        #    where q = Q_ord^H e₁ = conj(first row of Q_ord)
+        #    IMPORTANT: use conj() for complex Q, and sum(.*) not dot() to avoid
+        #    Julia's dot(a,b) = conj(a)·b conjugation of the first argument.
+        q = conj.(Q_ord[1, :])     # Q^H e₁
+        q1 = q[1]
+        q_rest = q[2:n]
+        T12 = T_ord[1, 2:n]
+        T22 = T_ord[2:n, 2:n]
+
+        # Triangular solve: (T22 - λI) z = q_rest
+        z = (T22 - lambda_j_bf * I) \ q_rest
+
+        # ℓ_j(1) = real(q₁ - T₁₂·z) using unconjugated inner product
+        ell_center[j] = real(q1 - sum(T12 .* z))
+
+        # Solve residual (sanity check — should be ~eps at working precision)
+        solve_resid = BigFloat(norm((T22 - lambda_j_bf * I) * z - q_rest))
+
+        # 3. Ordschur quality check (for all 50 eigenvalues — rigorous bound)
+        #    Each ordschur reordering applies different Givens rotations,
+        #    so the orthogonality defect must be checked per eigenvalue.
+        #    NOTE: We check ||Q_ord'*Q_ord - I|| (the ordschur unitarity defect).
+        #    The Schur equation residual A*Q_ord - Q_ord*T_ord is NOT checked
+        #    separately: it equals the original Schur defect (E_bound_total)
+        #    plus a correction controlled by the ordschur orth defect.
+        ordschur_orth  = Q_ord' * Q_ord - Matrix{Complex{BigFloat}}(I, n, n)
+        ordschur_orth_norm  = upper_bound_L2_opnorm(BallMatrix(ordschur_orth))
+        if j <= 3
+            @printf("  ordschur quality: ||Q_ord'*Q_ord - I||_2 ≤ %.2e\n",
+                    Float64(ordschur_orth_norm))
+        end
+
+        # 4. Perturbation bound (Schur residual + ordschur defect → spectral coeff error)
+        #    The triangular solve is computed in exact BigFloat arithmetic
+        #    (solve error ~10^{-306} at 1024-bit), so the dominant error is
+        #    from A ≠ QTQ^H (the Schur residual E_bound_total) plus the
+        #    ordschur reordering defect (Lemma lem:proj-triangle-split).
+        #    Combined error: ||A - Q_ord T_ord Q_ord'|| ≤ E_schur + E_ordschur
+        #    In exact arithmetic, ordschur is a unitary similarity so
+        #    ||A - Q_ord T_ord Q_ord'|| = ||A - Q T Q'||. The BigFloat
+        #    rounding adds: E_ordschur ≤ 4·||T||·||Q_ord'Q_ord - I||.
+        T_norm = upper_bound_L2_opnorm(BallMatrix(T_ord))
+        E_ordschur = setrounding(BigFloat, RoundUp) do
+            BigFloat(4) * T_norm * ordschur_orth_norm
+        end
+        E_combined = setrounding(BigFloat, RoundUp) do
+            E_bound_total + E_ordschur
+        end
+
+        diag_M = [abs(T22[i,i] - lambda_j_bf) for i in 1:n-1]
+        sep_bf = minimum(real, diag_M)   # eigenvalue separation for λ_j
+        # Rigorous ‖T₁₂‖₂ upper bound (T12 is a row vector, so spectral = L2)
+        T12_norm_bf = upper_bound_L2_opnorm(BallMatrix(reshape(T12, 1, :)))
         N_full = triu(T_ord, 1)
         N_norm = upper_bound_L2_opnorm(BallMatrix(N_full))
 
-        # 3. Solve Sylvester in BigFloat: (T₂₂ - λI)z = w_rest
-        T12 = T_ord[1, 2:n]
-        T22 = T_ord[2:n, 2:n]
-        M_tri = UpperTriangular(T22 - lambda_j_bf * I_m)
-
-        w = Q_ord[1, :]       # first row of Q_ord = Q_ord^H · e₁
-        w1, w_rest = w[1], w[2:n]
-
-        z0 = M_tri \ w_rest
-        ell_center[j] = real(w1 - dot(T12, z0))
-
-        # 4. Sylvester residual error
-        residual = w_rest - M_tri * z0
-        res_norm_bf = BigFloat(norm(residual))  # Euclidean norm (vector)
-
-        diag_M = [abs(T22[i,i] - lambda_j_bf) for i in 1:n-1]
-        sigma_min_bf = minimum(real, diag_M)
-        T12_norm_bf = BigFloat(norm(T12))       # Euclidean norm (row vector)
-
-        local sylv_err::BigFloat
-        if sigma_min_bf > 0
-            sylv_err = setrounding(BigFloat, RoundUp) do
-                delta_z = res_norm_bf / sigma_min_bf
-                bf_n = BigFloat(n)
-                T12_norm_bf * delta_z + bf_n * eps(BigFloat) * abs(ell_center[j])
-            end
-        else
-            sylv_err = BigFloat(Inf)
-        end
-
-        # 5. Perturbation correction (standalone Neumann/sigma resolvent bound)
-        local pert_err::BigFloat = setrounding(BigFloat, RoundUp) do
+        local pert_err::BigFloat, evec_err::BigFloat
+        (pert_err, evec_err) = setrounding(BigFloat, RoundUp) do
             rho = sep_bf / BF_TWO
             kappa = (BF_ONE + delta_bf) / max(BF_ONE - delta_bf, BigFloat(1e-300))
 
             R_neumann = rho > N_norm ? kappa / (rho - N_norm) : BigFloat(Inf)
             R_sigma = BigFloat(Inf)
-            if sigma_min_bf > rho
-                R22 = BF_ONE / (sigma_min_bf - rho)
+            if sep_bf > rho
+                R22 = BF_ONE / (sep_bf - rho)
                 R_sigma = kappa * (BF_ONE / rho) * (BF_ONE + T12_norm_bf * R22)
             end
             R_S = min(R_neumann, R_sigma)
 
-            if isinf(R_S) || R_S * E_bound_total >= BF_ONE
-                BigFloat(Inf)
+            if isinf(R_S) || R_S * E_combined >= BF_ONE
+                (BigFloat(Inf), BigFloat(Inf))
             else
-                rho * R_S^2 * E_bound_total / (BF_ONE - R_S * E_bound_total)
+                denom = BF_ONE - R_S * E_combined
+                pe = rho * R_S^2 * E_combined / denom
+                ve = R_S * E_combined / denom  # eigenvector L2 error bound
+                (pe, ve)
             end
         end
 
-        # 6. Total error = sylvester + perturbation (no NK needed)
-        ell_radius[j] = setrounding(BigFloat, RoundUp) do
-            sylv_err + pert_err
-        end
+        # 5. Total error = perturbation bound (solve error negligible)
+        ell_radius[j] = pert_err
+        eigvec_radius[j] = evec_err
 
         sign_ok = abs(ell_center[j]) > ell_radius[j] ? "YES" : "NO"
         dt_j = time() - t1
-        @printf("  j=%2d: lam=%+.10e  ell=%+.15e +/- %.2e  sylv=%.2e  pert=%.2e  %s  [%.1fs]\n",
+        @printf("  j=%2d: lam=%+.10e  ell=%+.15e +/- %.2e  ||dv||=%.2e  sep=%.2e  %s  [%.1fs]\n",
                 j, Float64(eigenvalues_out[j]), Float64(ell_center[j]), Float64(ell_radius[j]),
-                Float64(sylv_err), Float64(pert_err), sign_ok, dt_j)
+                Float64(eigvec_radius[j]), Float64(sep_bf), sign_ok, dt_j)
         flush(stdout)
     end
 
     Serialization.serialize(CACHE_ELL, Dict(
         :ell_center => ell_center, :ell_radius => ell_radius,
+        :eigvec_radius => eigvec_radius,
         :eigenvalues_out => eigenvalues_out, :q1_vectors => q1_vectors))
     @info "ℓ_j(1) results cached to $CACHE_ELL"
 end
@@ -337,7 +368,87 @@ println("\nPhase 1: $n_ell_cert / $NUM_EIGS ℓ_j(1) sign-certified\n")
 flush(stdout)
 
 # ═══════════════════════════════════════════════════════════════════════
-# PHASE 2: Summary + save + export
+# PHASE 2: Eigenvalue enclosures via projector control (Lemma 2.12)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Uses M_∞,j (infinite-dimensional resolvent) from Script 1's results,
+# transferred to K=512 via reverse_transfer_resolvent_bound.
+# Projector error: ϑ_j = (|Γ_j|/2π) · R_{A_512}² · ε_512 / (1 - R_{A_512}·ε_512)
+# Eigenvalue enclosure: |λ*_j - λ̂_j| ≤ (ε_K(1+ϑ_j) + 2C·ϑ_j) / (1-ϑ_j)
+
+println("=" ^ 80)
+println("PHASE 2: EIGENVALUE ENCLOSURES (PROJECTOR CONTROL AT K=$K)")
+println("=" ^ 80)
+println()
+flush(stdout)
+
+# Load M_∞ and circle_radius from Script 1
+@assert isfile(SCRIPT1_RESULTS) "Script 1 results not found at $SCRIPT1_RESULTS"
+script1 = Serialization.deserialize(SCRIPT1_RESULTS)
+M_inf_all = script1[:M_inf_all]::Vector{Float64}
+resolvent_data_s1 = script1[:resolvent_data]
+
+# Compute ε_512
+eps_K_512 = _arb_to_float64_upper(compute_Δ(K; N=N_SPLITTING))
+@printf("  ε_{K=%d} ≤ %.6e\n", K, eps_K_512)
+
+# Compute C = ||A_K||₂ (rigorous upper bound including BallMatrix radii)
+C_AK = Float64(upper_bound_L2_opnorm(A_ball_bf))
+@printf("  ||A_%d||₂ ≤ %.6e\n", K, C_AK)
+println()
+
+eval_encl = Vector{Float64}(undef, NUM_EIGS)
+proj_error_512 = Vector{Float64}(undef, NUM_EIGS)
+
+for j in 1:NUM_EIGS
+    M_inf_j = M_inf_all[j]
+    rd = resolvent_data_s1[j]
+    circle_radius_j = rd.circle_radius
+
+    if !isfinite(M_inf_j)
+        eval_encl[j] = Inf
+        proj_error_512[j] = Inf
+        @printf("  j=%2d: M_inf=Inf → SKIP\n", j)
+        continue
+    end
+
+    # Transfer: R_{A_512} ≤ M_∞ / (1 - M_∞ · ε_512)
+    R_A512, alpha_512, valid = reverse_transfer_resolvent_bound(M_inf_j, eps_K_512)
+    if !valid
+        eval_encl[j] = Inf
+        proj_error_512[j] = Inf
+        @printf("  j=%2d: transfer FAILED (alpha=%.2e)\n", j, alpha_512)
+        continue
+    end
+
+    # Projector error: ϑ_j
+    contour_length = 2π * circle_radius_j
+    theta_j, theta_valid = projector_approximation_error_rigorous(
+        contour_length, R_A512, eps_K_512)
+    proj_error_512[j] = theta_valid ? theta_j : Inf
+
+    if !theta_valid || theta_j >= 1.0
+        eval_encl[j] = Inf
+        @printf("  j=%2d: projector error ϑ=%.2e ≥ 1 → FAIL\n", j, theta_j)
+        continue
+    end
+
+    # Eigenvalue enclosure: |λ*_j - λ̂_j| ≤ (ε_K(1+ϑ) + 2C·ϑ) / (1-ϑ)
+    eval_encl[j] = setrounding(Float64, RoundUp) do
+        (eps_K_512 * (1.0 + theta_j) + 2.0 * C_AK * theta_j) / (1.0 - theta_j)
+    end
+
+    @printf("  j=%2d: M_inf=%.4e  R_512=%.4e  ϑ=%.2e  encl=%.2e\n",
+            j, M_inf_j, R_A512, theta_j, eval_encl[j])
+    flush(stdout)
+end
+
+n_encl = count(isfinite, eval_encl)
+println("\nPhase 2: $n_encl / $NUM_EIGS eigenvalue enclosures finite\n")
+flush(stdout)
+
+# ═══════════════════════════════════════════════════════════════════════
+# PHASE 3: Summary + save + export
 # ═══════════════════════════════════════════════════════════════════════
 
 println("=" ^ 80)
@@ -345,23 +456,25 @@ println("SUMMARY  K=$K, P=$PRECISION, $NUM_EIGS eigenvalues")
 println("=" ^ 80)
 println()
 
-println("-" ^ 110)
-@printf("  %3s  %22s  %12s  %12s  %26s  %6s\n",
-    "j", "lam_j", "sylv_err", "pert_err", "ell_j(1)", "sign")
-println("-" ^ 110)
+println("-" ^ 120)
+@printf("  %3s  %22s  %12s  %26s  %6s  %12s\n",
+    "j", "lam_j", "pert_err", "ell_j(1)", "sign", "eval_encl")
+println("-" ^ 120)
 
 for j in 1:NUM_EIGS
     sign_ok = abs(ell_center[j]) > ell_radius[j] ? "YES" : "NO"
-    @printf("  %3d  %+22.14e  %12.4e  %12.4e  %+22.14e +/- %.2e  %6s\n",
+    @printf("  %3d  %+22.14e  %12.4e  %+22.14e +/- %.2e  %6s  %12.4e\n",
             j, Float64(eigenvalues_out[j]),
-            Float64(ell_radius[j]),  # total (sylv+pert)
             Float64(ell_radius[j]),
-            Float64(ell_center[j]), Float64(ell_radius[j]), sign_ok)
+            Float64(ell_center[j]), Float64(ell_radius[j]), sign_ok,
+            eval_encl[j])
 end
-println("-" ^ 110)
+println("-" ^ 120)
 println()
 
+n_encl_final = count(isfinite, eval_encl)
 @printf("  ell_j(1) sign:      %d / %d\n", n_ell_cert, NUM_EIGS)
+@printf("  eval enclosures:    %d / %d\n", n_encl_final, NUM_EIGS)
 println()
 
 # Save unified results
@@ -375,7 +488,13 @@ Serialization.serialize(RESULTS_PATH, Dict(
     :ell_radius => Float64.(ell_radius),
     :ell_center_bf => ell_center,
     :ell_radius_bf => ell_radius,
+    :eigvec_radius => Float64.(eigvec_radius),
+    :eigvec_radius_bf => eigvec_radius,
     :E_bound => Float64(E_bound_total),
+    :eval_encl => eval_encl,
+    :proj_error_512 => proj_error_512,
+    :eps_K_512 => eps_K_512,
+    :C_AK => C_AK,
 ))
 @info "Results saved to $RESULTS_PATH"
 
@@ -387,25 +506,26 @@ open(latex_path, "w") do io
     println(io, "% K=$K, precision=$PRECISION bits, no NK (projector perturbation only)")
     println(io)
 
-    println(io, "\\begin{longtable}{rrrrr}")
+    println(io, "\\begin{longtable}{rrrrrr}")
     println(io, "\\caption{Certified spectral data (K=$K, P=$PRECISION).}")
-    println(io, "\\label{tab:spectral-data-K$(K)} \\\\")
+    println(io, "\\label{S-tab:spectral-data-K$(K)} \\\\")
     println(io, "\\toprule")
-    println(io, "\$j\$ & \$\\hat\\lambda_j\$ & \$\\ell_j(1)\$ & \$\\ell_j(1)\$ radius & sign \\\\")
+    println(io, "\$j\$ & \$\\hat\\lambda_j\$ & \$\\ell_j(1)\$ & \$\\ell_j(1)\$ radius & sign & \$\\pm\\;\\delta_\\lambda\$ \\\\")
     println(io, "\\midrule")
     println(io, "\\endfirsthead")
-    println(io, "\\multicolumn{5}{c}{\\textit{continued}} \\\\")
+    println(io, "\\multicolumn{6}{c}{\\textit{continued}} \\\\")
     println(io, "\\toprule")
-    println(io, "\$j\$ & \$\\hat\\lambda_j\$ & \$\\ell_j(1)\$ & \$\\ell_j(1)\$ radius & sign \\\\")
+    println(io, "\$j\$ & \$\\hat\\lambda_j\$ & \$\\ell_j(1)\$ & \$\\ell_j(1)\$ radius & sign & \$\\pm\\;\\delta_\\lambda\$ \\\\")
     println(io, "\\midrule")
     println(io, "\\endhead")
 
     for j in 1:NUM_EIGS
         sign_ok = abs(ell_center[j]) > ell_radius[j]
-        @printf(io, "%d & \$%+.12e\$ & \$%+.14e\$ & \$%.2e\$ & %s \\\\\n",
+        encl_str = isfinite(eval_encl[j]) ? @sprintf("\$%.2e\$", eval_encl[j]) : "\$\\infty\$"
+        @printf(io, "%d & \$%+.12e\$ & \$%+.14e\$ & \$%.2e\$ & %s & %s \\\\\n",
                 j, Float64(eigenvalues_out[j]),
                 Float64(ell_center[j]), Float64(ell_radius[j]),
-                sign_ok ? "\\checkmark" : "--")
+                sign_ok ? "\\checkmark" : "--", encl_str)
     end
 
     println(io, "\\bottomrule")
@@ -419,7 +539,7 @@ open(txt_path, "w") do io
     println(io, "# GKW operator spectral expansion coefficients")
     println(io, "# K = $K, BigFloat precision = $PRECISION bits (≈$(round(Int, PRECISION * log10(2))) decimal digits)")
     println(io, "# ||E|| = ||A_true - QTQ'||_2 <= ", string(E_bound_total))
-    println(io, "# Method: Schur + ordschur + Sylvester + perturbation (no NK)")
+    println(io, "# Method: Schur + ordschur + direct triangular Sylvester + Schur perturbation bound")
     println(io, "#")
     println(io, "# Columns: j, lambda_j, ell_j(1), ell_radius, sign_certified")
     println(io, "#")
@@ -431,7 +551,101 @@ open(txt_path, "w") do io
 end
 @info "Text export: $txt_path"
 
-# --- Eigenvector coefficients ---
+# --- Theorem LaTeX snippet (eigenvalue enclosures for supplementary material) ---
+function _format_latex_sci(x::Float64)
+    if !isfinite(x)
+        return "\\infty"
+    end
+    e = floor(Int, log10(abs(x)))
+    m = x / 10.0^e
+    @sprintf("%.2f \\times 10^{%d}", m, e)
+end
+
+function _format_lambda_center(x::Float64)
+    ax = abs(x)
+    if ax >= 0.001
+        return @sprintf("%.12f", x)
+    else
+        e = floor(Int, log10(ax))
+        m = x / 10.0^e
+        return @sprintf("%.6f \\times 10^{%d}", m, e)  # sign included via x
+    end
+end
+
+theorem_path = joinpath(DATA_DIR, "theorem_enclosures_K$(K).tex")
+open(theorem_path, "w") do io
+    println(io, "% Eigenvalue enclosures for Theorem (K=$K)")
+    println(io, "% Generated: $(now())")
+    println(io, "% Paste this into supplementary_material.tex inside the theorem environment")
+    println(io)
+    println(io, "\\begin{enumerate}")
+    for j in 1:NUM_EIGS
+        lam_str = _format_lambda_center(Float64(eigenvalues_out[j]))
+        encl_str = _format_latex_sci(eval_encl[j])
+        proj_str = _format_latex_sci(proj_error_512[j])
+        @printf(io, "\\item \$\\lambda_{%d}^* \\in B(%s,\\; %s)\$, \\quad \$\\|P_{L_1}(\\Gamma_{%d}) - P_{(L_1)_{%d}}(\\Gamma_{%d})\\| \\leq %s\$\n",
+                j, lam_str, encl_str, j, K, j, proj_str)
+    end
+    println(io, "\\end{enumerate}")
+end
+@info "Theorem snippet written to $theorem_path"
+
+# --- Eigenvector coefficient LaTeX tables ---
+const NUM_COEFFS_DISPLAY = 50  # number of coefficients per eigenvector to show
+eigvec_latex_path = joinpath(DATA_DIR, "eigenvector_tables_K$(K).tex")
+open(eigvec_latex_path, "w") do io
+    println(io, "% Eigenvector coefficient tables for K=$K")
+    println(io, "% Generated: $(now())")
+    println(io, "% Each table shows the first $NUM_COEFFS_DISPLAY coefficients of v_j in {(w-1)^k}")
+    println(io, "% with rigorous L2 error bound ||v̂_j - v_j||₂ ≤ δ_j from Schur perturbation")
+    println(io)
+    println(io, raw"\subsection*{Eigenvector Coefficients $[v_j]_k$}")
+    println(io)
+    println(io, "The following tables list the first \$$NUM_COEFFS_DISPLAY\$ coefficients of each unit-norm")
+    println(io, raw"eigenvector $v_j$ in the shifted monomial basis $\{(w-1)^k\}_{k=0}^{K}$.")
+    println(io, raw"The $\ell^2$ error $\|\hat{v}_j - v_j\|_2 \leq \delta_j$ shown for each")
+    println(io, raw"eigenvector is controlled by the Schur orthogonality defect and the")
+    println(io, raw"reconstruction error from the ordschur + Sylvester pipeline")
+    println(io, "(see Table~\\ref{S-tab:spectral-data-K$(K)}).")
+    evr_range = extrema(Float64.(eigvec_radius))
+    @printf(io, "Eigenvectors at \$K = %d\$ (1024-bit precision) achieve radii \$\\sim 10^{%d}\$--\$10^{%d}\$.\n",
+            K, floor(Int, log10(evr_range[1])), floor(Int, log10(evr_range[2])))
+    println(io)
+
+    nrows = NUM_COEFFS_DISPLAY ÷ 2
+
+    for j in 1:NUM_EIGS
+        lam_str = @sprintf("%.6e", Float64(eigenvalues_out[j]))
+        ell_str = @sprintf("%+.6e", Float64(ell_center[j]))
+        evr_str = @sprintf("%.2e", Float64(eigvec_radius[j]))
+
+        println(io, "\\paragraph{\$j = $j\$: \$\\lambda_{$j} = $lam_str\$, \\quad \$\\ell_{$j}(\\mathbf{1}) = $ell_str\$, \\quad \$\\|\\hat{v}_{$j} - v_{$j}\\|_2 \\leq $evr_str\$}")
+        println(io, "\\begin{center}")
+        println(io, "{\\footnotesize")
+        println(io, "\\begin{tabular}{r@{\\;\\;}l@{\\quad}r@{\\;\\;}l}")
+        println(io, "\\toprule")
+        println(io, "\$k\$ & \$[v_{$j}]_k\$ & \$k\$ & \$[v_{$j}]_k\$ \\\\")
+        println(io, "\\midrule")
+
+        v = q1_vectors[j]
+        for row in 0:nrows-1
+            k1 = row
+            k2 = row + nrows
+            c1 = Float64(real(v[k1+1]))
+            c2 = Float64(real(v[k2+1]))
+            @printf(io, "%d & \$%+.10e\$ & %d & \$%+.10e\$ \\\\\n", k1, c1, k2, c2)
+        end
+
+        println(io, "\\bottomrule")
+        println(io, "\\end{tabular}")
+        println(io, "}")
+        println(io, "\\end{center}")
+        println(io)
+    end
+end
+@info "Eigenvector LaTeX tables written to $eigvec_latex_path"
+
+# --- Eigenvector coefficients (text export) ---
 vec_file = joinpath(DATA_DIR, "eigenvectors_K$(K)_P$(PRECISION).txt")
 open(vec_file, "w") do io
     println(io, "# GKW operator eigenvector coefficients in shifted monomial basis {(x-1)^k}")

@@ -1,7 +1,7 @@
 #!/usr/bin/env julia
 # Compute rigorous tail bound for N=50 using:
 #   - Phase 3 tail resolvent (ρ=1.014e-21, M_∞=6.062e+41) from full_certification_50eigs.jl
-#   - K=512 spectral data: ℓ_j(1) centers/radii + q1 eigenvectors from bigfloat_spectral_K512.jl
+#   - K=1024 spectral data: ℓ_j(1) centers/radii + q1 eigenvectors from bigfloat_spectral_K1024.jl
 #
 # The tail bound is:
 #   ‖R_50(n)‖₂ ≤ ρ^{n+1} · M_∞ · ‖Q_50 · 1‖
@@ -16,8 +16,8 @@ using LinearAlgebra
 using Printf
 using Serialization
 
-const PRECISION = 1024
-const K = 512
+const PRECISION = 2048
+const K = 1024
 const n = K + 1
 const NUM_EIGS = 50
 const N_SPLITTING = 5000
@@ -282,7 +282,7 @@ tail_data = Dict(
     :eps_K => Float64(ε_K),
     :lambda_50 => Float64(eigenvalues_bf[NUM_EIGS]),
 )
-Serialization.serialize(joinpath(DATA_DIR, "tail_bound_N50_K512.jls"), tail_data)
+Serialization.serialize(joinpath(DATA_DIR, "tail_bound_N50_K1024.jls"), tail_data)
 
 open(joinpath(DATA_DIR, "tail_bound_N50.txt"), "w") do io
     println(io, "# Rigorous tail bound for spectral expansion remainder R_50(n)")

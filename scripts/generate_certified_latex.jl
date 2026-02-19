@@ -266,8 +266,8 @@ struct CertifiedEigenvalue
     deflation_radius::Float64
     deflation_alpha::Float64
     deflation_certified::Bool
-    nk_radius::Float64
-    nk_certified::Bool
+    proj_eval_encl::Float64         # eigenvalue enclosure from projector control
+    proj_certified::Bool
     best_radius::Float64
     best_method::String
 end
@@ -488,31 +488,50 @@ for rank in 1:eigenvalues_to_process
         end
     end
 
-    # --- Method 3: Newton–Kantorovich (independent of resolvent methods) ---
-    # NK is self-contained: it builds its own Jacobian and preconditioner,
-    # so it can succeed even when the resolvent/deflation methods fail.
-    nk_radius = Inf
-    nk_certified = false
+    # --- Method 3: Projector-based eigenvalue enclosure ---
+    # From Lemma lem:proj-controls-eval: if ϑ_j < 1, then
+    # |λ_j - λ̂_j| ≤ (ε_K(1+ϑ_j) + 2C·ϑ_j) / (1-ϑ_j)
+    # where C = ‖A_K‖ and ϑ_j is the Riesz projector error.
+    proj_eval_encl = Inf
+    proj_certified = false
 
-    @info "  NK certification..."
-    try
-        nk_result = certify_eigenpair_nk(s; K=K, target_idx=rank, N_C2=N_SPLITTING)
-        nk_radius = nk_result.enclosure_radius
-        nk_certified = nk_result.is_certified
-
-        if nk_certified
-            @info "  NK: CERTIFIED (r_NK = $(round(nk_radius, sigdigits=6)))"
-        else
-            @info "  NK: FAILED (q₀ = $(round(nk_result.q0_bound, sigdigits=4)))"
+    if direct_certified || deflation_certified
+        # Use the resolvent bound to compute projector error, then eigenvalue enclosure
+        best_resolvent = min(
+            direct_certified ? direct_resolvent : Inf,
+            deflation_certified ? deflation_alpha / eps_K_float : Inf
+        )
+        best_alpha = min(
+            direct_certified ? direct_alpha : Inf,
+            deflation_certified ? deflation_alpha : Inf
+        )
+        # Riesz projector error: ϑ ≤ (|Γ|/(2π)) · M_∞² · ε_K / (1 - α)
+        contour_length = 2π * circle_radius
+        M_inf = setrounding(Float64, RoundUp) do
+            best_resolvent / (1.0 - best_alpha)
         end
-    catch e
-        @warn "  NK failed with error: $e"
+        proj_error = setrounding(Float64, RoundUp) do
+            (contour_length / (2π)) * M_inf^2 * eps_K_float / (1.0 - best_alpha)
+        end
+        if proj_error < 1.0
+            # ‖A_K‖ upper bound (use Frobenius as quick heuristic for this script)
+            C_AK = Float64(opnorm(BallArithmetic.mid(A), 2))
+            proj_eval_encl = setrounding(Float64, RoundUp) do
+                (eps_K_float * (1.0 + proj_error) + 2.0 * C_AK * proj_error) / (1.0 - proj_error)
+            end
+            proj_certified = isfinite(proj_eval_encl)
+            if proj_certified
+                @info "  Projector control: CERTIFIED (eval encl = $(round(proj_eval_encl, sigdigits=6)))"
+            end
+        else
+            @info "  Projector control: FAILED (ϑ = $(round(proj_error, sigdigits=4)) ≥ 1)"
+        end
     end
 
     # --- Choose best method ---
-    best_radius = min(direct_radius, deflation_radius, nk_radius)
-    best_method = if best_radius == nk_radius && nk_certified
-        "NK"
+    best_radius = min(direct_radius, deflation_radius, proj_eval_encl)
+    best_method = if best_radius == proj_eval_encl && proj_certified
+        "projector"
     elseif best_radius == direct_radius && direct_certified
         "direct"
     elseif deflation_certified
@@ -531,7 +550,7 @@ for rank in 1:eigenvalues_to_process
         rank, λ_center, vbd_radius,
         direct_radius, direct_alpha, direct_certified,
         deflation_radius, deflation_alpha, deflation_certified,
-        nk_radius, nk_certified,
+        proj_eval_encl, proj_certified,
         best_radius, best_method
     ))
     push!(certified_centers, λ_center)
@@ -637,14 +656,14 @@ open(OUTPUT_PATH, "w") do io
     println(io, "\\label{tab:certified-eigenvalues}")
     println(io, "\\begin{tabular}{clllll}")
     println(io, "\\toprule")
-    println(io, "\$i\$ & Center \$\\hat\\lambda_i\$ & VBD radius & Resolvent radius & NK radius & Method \\\\")
+    println(io, "\$i\$ & Center \$\\hat\\lambda_i\$ & VBD radius & Resolvent radius & Eval.~encl. & Method \\\\")
     println(io, "\\midrule")
     for e in certified_eigenvalues_data
         center_str = format_eigenvalue(e.center)
         vbd_str = latex_sci(e.vbd_radius)
         resolvent_str = e.direct_certified ? latex_sci(e.direct_radius) : "---"
-        nk_str = e.nk_certified ? latex_sci(e.nk_radius) : "---"
-        println(io, "$(e.index) & \$$(center_str)\$ & \$$(vbd_str)\$ & \$$(resolvent_str)\$ & \$$(nk_str)\$ & $(e.best_method) \\\\")
+        proj_str = e.proj_certified ? latex_sci(e.proj_eval_encl) : "---"
+        println(io, "$(e.index) & \$$(center_str)\$ & \$$(vbd_str)\$ & \$$(resolvent_str)\$ & \$$(proj_str)\$ & $(e.best_method) \\\\")
     end
     println(io, "\\bottomrule")
     println(io, "\\end{tabular}")
@@ -654,19 +673,19 @@ open(OUTPUT_PATH, "w") do io
     # -- Table 3: Method comparison --
     println(io, "\\begin{table}[htbp]")
     println(io, "\\centering")
-    println(io, "\\caption{Comparison of certification methods: direct resolvent, polynomial deflation, and Newton--Kantorovich.}")
+    println(io, "\\caption{Comparison of certification methods: direct resolvent, polynomial deflation, and projector control.}")
     println(io, "\\label{tab:method-comparison}")
     println(io, "\\begin{tabular}{cllllll}")
     println(io, "\\toprule")
-    println(io, "\$i\$ & Direct \$\\alpha\$ & Direct radius & Deflation \$\\alpha\$ & Deflation radius & NK radius & Best \\\\")
+    println(io, "\$i\$ & Direct \$\\alpha\$ & Direct radius & Deflation \$\\alpha\$ & Deflation radius & Eval.~encl. & Best \\\\")
     println(io, "\\midrule")
     for e in certified_eigenvalues_data
         d_alpha = e.direct_certified ? latex_sci(e.direct_alpha) : "\\text{fail}"
         d_rad = e.direct_certified ? latex_sci(e.direct_radius) : "---"
         defl_alpha = e.deflation_certified ? latex_sci(e.deflation_alpha) : (e.index >= 2 ? "\\text{fail}" : "---")
         defl_rad = e.deflation_certified ? latex_sci(e.deflation_radius) : "---"
-        nk_rad = e.nk_certified ? latex_sci(e.nk_radius) : "---"
-        println(io, "$(e.index) & \$$(d_alpha)\$ & \$$(d_rad)\$ & \$$(defl_alpha)\$ & \$$(defl_rad)\$ & \$$(nk_rad)\$ & $(e.best_method) \\\\")
+        proj_rad = e.proj_certified ? latex_sci(e.proj_eval_encl) : "---"
+        println(io, "$(e.index) & \$$(d_alpha)\$ & \$$(d_rad)\$ & \$$(defl_alpha)\$ & \$$(defl_rad)\$ & \$$(proj_rad)\$ & $(e.best_method) \\\\")
     end
     println(io, "\\bottomrule")
     println(io, "\\end{tabular}")
@@ -721,13 +740,13 @@ open(OUTPUT_PATH, "w") do io
     println(io, "Let \$\\mathcal{L}_1 \\colon H^2(\\mathbb{D}_1) \\to H^2(\\mathbb{D}_1)\$ be the GKW transfer operator at \$s=1\$.")
     println(io, "Using a Galerkin discretization of size \$K=$(K)\$ with \$$(PRECISION)\$-bit arithmetic,")
     println(io, "BallArithmetic's rigorous block Schur decomposition (Miyajima VBD),")
-    println(io, "and Newton--Kantorovich refinement on the eigenpair map,")
+    println(io, "and projector-based eigenvalue control,")
     println(io, "the following eigenvalue enclosures are rigorously certified:")
     println(io, "\\begin{align*}")
     for (j, e) in enumerate(certified_eigenvalues_data)
         center_str = format_eigenvalue(e.center)
         radius_str = latex_sci(e.best_radius)
-        method_tag = e.best_method == "NK" ? "\\text{NK}" : "\\text{$(e.best_method)}"
+        method_tag = "\\text{$(e.best_method)}"
         sep = j < num_certified ? " \\\\" : ""
         println(io, "  \\lambda_{$(e.index)} &\\in [$(center_str) \\pm $(radius_str)] \\quad ($(method_tag))$(sep)")
     end

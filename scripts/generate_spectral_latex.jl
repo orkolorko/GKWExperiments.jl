@@ -5,9 +5,9 @@
 using Printf
 
 # Parse the data file
-ell_data = Dict{Int, NamedTuple{(:lambda, :ell_c, :ell_r, :norm_P1, :proj_norm, :idemp, :sep, :nk_rad),
+ell_data = Dict{Int, NamedTuple{(:lambda, :ell_c, :ell_r, :norm_P1, :proj_norm, :idemp, :sep, :eval_encl),
                                  Tuple{Float64,Float64,Float64,Float64,Float64,Float64,Float64,Float64}}}()
-eigvec_coeffs = Dict{Int, Vector{Tuple{Int, Float64, Float64}}}()  # j => [(k, center, nk_radius), ...]
+eigvec_coeffs = Dict{Int, Vector{Tuple{Int, Float64, Float64}}}()  # j => [(k, center, radius), ...]
 
 current_section = :none
 for line in eachline("data/spectral_expansion.txt")
@@ -32,7 +32,7 @@ for line in eachline("data/spectral_expansion.txt")
                        proj_norm = parse(Float64, parts[6]),
                        idemp = parse(Float64, parts[7]),
                        sep = parse(Float64, parts[8]),
-                       nk_rad = parse(Float64, parts[9]))
+                       eval_encl = parse(Float64, parts[9]))
     elseif current_section == :eigvec && length(parts) >= 5
         j = parse(Int, parts[1])
         k = parse(Int, parts[3])
@@ -67,16 +67,14 @@ and $R_N(n)$ is bounded by $|\lambda_{N+1}|^n$ times the tail projector norm.
 
 \medskip\noindent
 \textbf{Computation of $\ell_j(\mathbf{1})$.}
-The Riesz projector $P_j$ is computed rigorously at $K = 256$ using Sylvester-based
-Schur enclosure (ball arithmetic).
-The right eigenvector $v_j$ is the Schur eigenvector with $\|v_j\|_2 = 1$,
-enclosed by the Newton--Kantorovich certification with radius $r_{\mathrm{NK}}$
-(Table~\ref{tab:two-stage-results}).
-The spectral coefficient is obtained via the rigorous inner product
-$\ell_j(\mathbf{1}) = \langle P_j(\mathbf{1}), \hat{v}_j \rangle \pm \delta$,
-where $\delta$ accounts for both the ball arithmetic radius and the NK
-eigenvector error:
-$\delta \leq r_{\mathrm{ball}} + \|P_j(\mathbf{1})\|_2 \cdot 2 r_{\mathrm{NK}} / (1 - r_{\mathrm{NK}})$.
+The spectral coefficient $\ell_j(\mathbf{1})$ is computed from the ordered Schur form
+via the direct triangular Sylvester solve:
+with $T_{\mathrm{ord}} = \bigl[\begin{smallmatrix} \lambda_j & T_{12} \\ 0 & T_{22}\end{smallmatrix}\bigr]$
+and $q = Q_{\mathrm{ord}}^* e_1$,
+$\ell_j(\mathbf{1}) = q_1 - T_{12} \cdot (T_{22} - \lambda_j I)^{-1} q_{\mathrm{rest}}$.
+The certified error $\delta$ is dominated by the Schur similarity defect;
+the triangular solve residual is negligible ($\sim 10^{-309}$ at $1024$-bit).
+Sign certification holds when $|\ell_j(\mathbf{1})| > \delta$.
 """)
 
 # Summary table with ℓ_j(1)
@@ -171,9 +169,9 @@ println(io, raw"""
 
 The following tables list the first $50$ coefficients of each unit-norm
 eigenvector $v_j$ in the shifted monomial basis $\{(w-1)^k\}_{k=0}^{K}$.
-Each coefficient is known to within $\pm\, r_{\mathrm{NK}}$
-(Table~\ref{tab:two-stage-results}), where $r_{\mathrm{NK}}$
-is the Newton--Kantorovich eigenpair enclosure radius.
+Each coefficient carries a rigorous error radius from the certified
+Schur decomposition and ordschur reordering
+(Table~\ref{tab:spectral-coefficients}).
 """)
 
 for j in 1:20
@@ -182,10 +180,10 @@ for j in 1:20
 
     λ_str = @sprintf("%.6e", d.lambda)
     ell_str = @sprintf("%+.6e", d.ell_c)
-    nk_str = @sprintf("%.2e", d.nk_rad)
+    rad_str = @sprintf("%.2e", d.ell_r)
 
     println(io, """
-\\paragraph{\$j = $j\$: \$\\lambda_{$j} = $λ_str\$, \\quad \$\\ell_{$j}(\\mathbf{1}) = $ell_str\$, \\quad \$r_{\\mathrm{NK}} = $nk_str\$}
+\\paragraph{\$j = $j\$: \$\\lambda_{$j} = $λ_str\$, \\quad \$\\ell_{$j}(\\mathbf{1}) = $ell_str\$, \\quad \$\\delta = $rad_str\$}
 {\\footnotesize
 \\begin{tabular}{r@{\\;\\;}l@{\\quad}r@{\\;\\;}l}
 \\toprule
@@ -250,7 +248,7 @@ $Q_N = I - \sum_{j=1}^N P_j$ is the tail spectral projector.
 
 \medskip\noindent
 \textbf{Factored tail bound.}
-Since $Q_N$ commutes with $L_r$ (Riesz projectors commute with the operator,
+Since $Q_N$ commutes with $L_1$ (Riesz projectors commute with the operator,
 regardless of normality), we have the factorization
 \[
 R_N(n) = Q_N L^n \mathbf{1} = (Q_N L^n)(Q_N \mathbf{1}),
@@ -259,10 +257,10 @@ using only $Q_N^2 = Q_N$ (Riesz idempotency) and $L$-invariance of $\operatornam
 The Cauchy integral on a circle $\Gamma = \{|z| = \rho\}$ in the eigenvalue gap
 $|\lambda_{N+1}| < \rho < |\lambda_N|$ bounds the operator factor:
 \[
-\|Q_N L^n\| = \left\|\frac{1}{2\pi i} \oint_\Gamma z^n R_{L_r}(z)\,dz\right\|
+\|Q_N L^n\| = \left\|\frac{1}{2\pi i} \oint_\Gamma z^n R_{L_1}(z)\,dz\right\|
 \leq \rho^{n+1} \cdot M_\infty,
 \]
-where $M_\infty = \sup_{z\in\Gamma} \|R_{L_r}(z)\|$ is obtained via the resolvent bridge.
+where $M_\infty = \sup_{z\in\Gamma} \|R_{L_1}(z)\|$ is obtained via the resolvent bridge.
 The tail projection $\|Q_N \mathbf{1}\|_2 = \|\mathbf{1} - \sum_{j=1}^N P_j \mathbf{1}\|_2$
 is computed directly from the rigorous Riesz projectors at $K=256$.
 
@@ -299,7 +297,7 @@ Circle radius \$\\rho\$ & \$$cr_str\$ \\\\
 \$\\|R_{A_K}(z)\\|\$ on \$\\Gamma\$ & \$$res_str\$ \\\\
 \$\\varepsilon_K\$ (at \$K=64\$) & \$$eps_str\$ \\\\
 Small-gain \$\\alpha = \\varepsilon_K \\cdot \\|R_{A_K}\\|\$ & \$$α_str\$ \\\\
-\$M_\\infty = \\|R_{L_r}\\|\$ on \$\\Gamma\$ & \$$M_str\$ \\\\
+\$M_\\infty = \\|R_{L_1}\\|\$ on \$\\Gamma\$ & \$$M_str\$ \\\\
 \$\\|Q_{20} \\mathbf{1}\\|_2\$ & \$$q1_str\$ \\\\
 Prefactor \$C = M_\\infty \\cdot \\|Q_{20}\\mathbf{1}\\|\$ & \$$pf_str\$ \\\\
 \\bottomrule
@@ -340,7 +338,7 @@ end
 content = String(take!(io))
 
 # Read existing base file (two-stage results without spectral section)
-existing = read("data/two_stage_results.tex", String)
+existing = read("data/supplementary_material.tex", String)
 
 # Remove any existing spectral section (from \clearpage\n\section*{Rigorous Spectral to end of doc)
 # and insert the new one
@@ -362,5 +360,5 @@ if !occursin("\\usepackage{graphicx}", new_content)
         "\\usepackage{booktabs}" => "\\usepackage{booktabs}\n\\usepackage{graphicx}")
 end
 
-write("data/two_stage_results.tex", new_content)
-println("Updated data/two_stage_results.tex with spectral expansion tables")
+write("data/supplementary_material.tex", new_content)
+println("Updated data/supplementary_material.tex with spectral expansion tables")

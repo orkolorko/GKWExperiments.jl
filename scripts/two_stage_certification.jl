@@ -408,7 +408,7 @@ println()
 
 mkpath("data")
 
-open("data/two_stage_results.tex", "w") do io
+open("data/supplementary_material.tex", "w") do io
     println(io, "% Two-Stage Certification Results for GKW Operator")
     println(io, "% Generated: $(now())")
     println(io, "% K_low = $K_LOW, K_high = $K_HIGH, N = $N_SPLITTING")
@@ -487,7 +487,7 @@ open("data/two_stage_results.tex", "w") do io
     # Theorem statement
     println(io, "\\begin{theorem}[Rigorous spectral certification of the GKW operator]")
     println(io, "\\label{thm:two-stage}")
-    println(io, "Let \$L_r : H^2(D_r) \\to H^2(D_r)\$ be the GKW transfer operator for \$s=1\$.")
+    println(io, "Let \$L_1 := SL : H^2(D_1) \\to H^2(D_1)\$ be the GKW transfer operator for \$s=1\$.")
     println(io, "The first $num_full eigenvalues \\(\\lambda_1, \\ldots, \\lambda_{$num_full}\\)")
     println(io, "are simple, with the following rigorous enclosures:")
     println(io, "\\begin{enumerate}")
@@ -495,7 +495,7 @@ open("data/two_stage_results.tex", "w") do io
     for r in two_stage_results
         if r.stage1_is_certified && r.stage2_is_certified && r.transfer_is_valid
             @printf(io, "\\item \$\\lambda_{%d} \\in B(%.12f, %.2e)\$", r.eigenvalue_index, real(r.eigenvalue_center), r.stage2_nk_radius)
-            @printf(io, ", \\quad \\|P_{L_r} - P_{A_{%d}}\\| \\leq %.2e\$\n", K_HIGH, r.riesz_projector_error)
+            @printf(io, ", \\quad \\|P_{L_1} - P_{(L_1)_{%d}}\\| \\leq %.2e\$\n", K_HIGH, r.riesz_projector_error)
         end
     end
 
@@ -503,7 +503,7 @@ open("data/two_stage_results.tex", "w") do io
     println(io, "\\end{theorem}")
 end
 
-@info "LaTeX output written to data/two_stage_results.tex"
+@info "LaTeX output written to data/supplementary_material.tex"
 
 println()
 println("="^80)

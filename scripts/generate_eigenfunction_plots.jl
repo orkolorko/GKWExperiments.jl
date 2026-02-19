@@ -1,5 +1,5 @@
 #!/usr/bin/env julia
-# Generate eigenfunction plots from K=512 spectral data.
+# Generate eigenfunction plots from K=1024 spectral data.
 # Produces eigenfunction batch plots (10 per figure) + spectral approximant + convergence.
 #
 # Usage:
@@ -8,7 +8,7 @@
 using CairoMakie, Printf, DelimitedFiles
 
 # ──────────────────────────────────────────────────────────────────────
-# Load K=512 eigenvector and spectral coefficient data from text files
+# Load K=1024 eigenvector and spectral coefficient data from text files
 # ──────────────────────────────────────────────────────────────────────
 
 const DATA_DIR = joinpath(@__DIR__, "..", "data")
@@ -16,7 +16,7 @@ const NUM_EIGS = 50
 
 # Parse eigenvector file: tab-separated, first column = k, then v_1 ... v_50
 println("Loading eigenvector data...")
-evec_lines = readlines(joinpath(DATA_DIR, "eigenvectors_K512_P1024.txt"))
+evec_lines = readlines(joinpath(DATA_DIR, "eigenvectors_K1024_P2048.txt"))
 evec_data_lines = filter(l -> !startswith(l, "#") && !startswith(l, "k"), evec_lines)
 K_plus_1 = length(evec_data_lines)
 eigenvectors = zeros(K_plus_1, NUM_EIGS)
@@ -30,7 +30,7 @@ println("  Loaded $(K_plus_1) coefficients × $NUM_EIGS eigenvectors")
 
 # Parse spectral coefficients file
 println("Loading spectral coefficient data...")
-coeff_lines = readlines(joinpath(DATA_DIR, "spectral_coefficients_K512_P1024.txt"))
+coeff_lines = readlines(joinpath(DATA_DIR, "spectral_coefficients_K1024_P2048.txt"))
 eigenvalues = zeros(NUM_EIGS)
 ell_center = zeros(NUM_EIGS)
 for line in coeff_lines
