@@ -14,6 +14,8 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Discretization" => "discretization.md",
+        "Certification Pipeline" => "certification_pipeline.md",
         "Certification Results" => "certification_results.md",
     ],
 )

@@ -36,6 +36,11 @@ julia> size(Z), length(ws)
 All exported functions are documented in the API reference below.  Docstrings
 are available at the REPL through Julia's help mode as usual, e.g. `?mid`.
 
+## Further reading
+
+- [Discretization](@ref): how the matrix $A_K$ is assembled and how $\varepsilon_K$ is bounded.
+- [Certification Pipeline](@ref): detailed walkthrough of the two-script resolvent/NK pipeline.
+
 ## Certification Scripts
 
 The `scripts/` directory contains ready-to-run examples for eigenvalue certification

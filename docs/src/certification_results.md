@@ -1,0 +1,179 @@
+# Certified Spectral Data for the GKW Operator
+
+This page contains rigorously certified spectral data for the classical
+Gauss-Kuzmin-Wirsing transfer operator (s=1).
+
+**Certification timestamp:** 2026-01-27T16:03:58.493
+
+## Certification Parameters
+
+| Parameter | Value |
+|-----------|-------|
+| Discretization K | 64 |
+| Matrix size | 65 × 65 |
+| Precision | 512 bits |
+| C₂ bound | 10.05810002 |
+| Truncation error ε_K | 3.602e-11 |
+
+## Certified Eigenvalues
+
+The following eigenvalues are rigorously certified using resolvent bounds
+and the finite-to-infinite dimensional lift.
+
+| Index | Eigenvalue λᵢ | Certified Radius | Small-gain α | Status |
+|-------|---------------|------------------|--------------|--------|
+| 1 | 0.999999999999999 | 1.9531e-05 | 7.8447e-06 | ✓ Certified |
+| 2 | -0.303663002898732 | 5.9309e-06 | 2.7559e-05 | ✓ Certified |
+| 3 | 0.100884509293104 | 1.9704e-06 | 8.6604e-05 | ✓ Certified |
+| 4 | -0.0354961590216598 | 6.9328e-07 | 2.5491e-04 | ✓ Certified |
+| 5 | 0.0128437903624403 | 2.5086e-07 | 7.2144e-04 | ✓ Certified |
+| 6 | -0.00471777751157104 | 9.2144e-08 | 1.9945e-03 | ✓ Certified |
+
+### Notable Eigenvalues
+
+- **λ₁ ≈ 1**: The Perron-Frobenius eigenvalue (invariant measure)
+- **λ₂ ≈ -0.3037**: The Wirsing constant, determining the rate of convergence
+  to the Gauss measure
+
+## Projection of Constant Function onto Eigenspaces
+
+For the spectral expansion ``L^n \cdot 1 = \sum_i \lambda_i^n \Pi_i(1)``,
+we compute the projection of the constant function 1 onto each eigenspace.
+
+| Index | [Πᵢ(1)]₀ (leading coeff) | Radius | ‖Πᵢ(1)‖_{L²} |
+|-------|--------------------------|--------|--------------|
+| 1 | 0.72137941385 | 1.72e-14 | 0.8329771975 |
+| 2 | 0.257379517633 | 1.26e-14 | 0.4511399898 |
+| 3 | 0.0182729091544 | 1.02e-14 | 0.2020281432 |
+| 4 | 0.00258983509241 | 1.00e-14 | 0.0872925609 |
+| 5 | 0.000326381074616 | 1.00e-14 | 0.03707062589 |
+| 6 | 4.45031644816e-5 | 1.00e-14 | 0.0151950138 |
+
+## Eigenvector Coefficients
+
+The eigenvectors are represented in the monomial basis ``\{(x-1)^k\}_{k=0}^K``.
+Below are the first 10 coefficients of each certified eigenvector.
+
+### Eigenvector v_1 (λ = 1.0000000000)
+
+```
+v[0] = -8.660254037844e-01
+v[1] = +4.330127018922e-01
+v[2] = -2.165063509461e-01
+v[3] = +1.082531754731e-01
+v[4] = -5.412658773653e-02
+v[5] = +2.706329386826e-02
+v[6] = -1.353164693413e-02
+v[7] = +6.765823467066e-03
+v[8] = -3.382911733533e-03
+v[9] = +1.691455866766e-03
+```
+
+### Eigenvector v_2 (λ = -0.3036630029)
+
+```
+v[0] = -5.705092065901e-01
+v[1] = -4.162454996025e-01
+v[2] = +5.119616743648e-01
+v[3] = -3.849198625430e-01
+v[4] = +2.461699714070e-01
+v[5] = -1.450824897558e-01
+v[6] = +8.141216120369e-02
+v[7] = -4.423293969454e-02
+v[8] = +2.350035792038e-02
+v[9] = -1.228659435422e-02
+```
+
+### Eigenvector v_3 (λ = 0.1008845093)
+
+```
+v[0] = -9.044734494144e-02
+v[1] = -7.068660107070e-01
+v[2] = +9.448985678839e-02
+v[3] = +3.086775037608e-01
+v[4] = -4.051254176803e-01
+v[5] = +3.476166459552e-01
+v[6] = -2.496457140479e-01
+v[7] = +1.620217337586e-01
+v[8] = -9.845091317023e-02
+v[9] = +5.712525784795e-02
+```
+
+### Eigenvector v_4 (λ = -0.0354961590)
+
+```
+v[0] = -2.966845130687e-02
+v[1] = -2.792405426546e-01
+v[2] = -5.685386018879e-01
+v[3] = +4.482418832737e-01
+v[4] = -3.340947457413e-02
+v[5] = -2.516780089683e-01
+v[6] = +3.461878684946e-01
+v[7] = -3.202397766613e-01
+v[8] = +2.475727934510e-01
+v[9] = -1.719036358233e-01
+```
+
+### Eigenvector v_5 (λ = 0.0128437904)
+
+```
+v[0] = +8.804304398616e-03
+v[1] = +1.282114165502e-01
+v[2] = +4.062017203797e-01
+v[3] = +2.504618933287e-01
+v[4] = -5.386456910676e-01
+v[5] = +3.438578833344e-01
+v[6] = -1.768788118901e-02
+v[7] = -2.147637445035e-01
+v[8] = +3.075368335291e-01
+v[9] = -3.000561734630e-01
+```
+
+### Eigenvector v_6 (λ = -0.0047177775)
+
+```
+v[0] = +2.928800530413e-03
+v[1] = +5.271351148338e-02
+v[2] = +2.575842127988e-01
+v[3] = +3.773320990927e-01
+v[4] = -8.733264362254e-02
+v[5] = -3.795465917734e-01
+v[6] = +4.868057627563e-01
+v[7] = -2.892103825029e-01
+v[8] = +1.475498888265e-02
+v[9] = +1.873669136701e-01
+```
+
+## Eigenfunction Plots
+
+![Certified Eigenfunctions](assets/eigenfunction_plots.png)
+
+**Top panel:** Eigenfunctions vᵢ(x) evaluated on [0,1].
+
+**Bottom panel:** Projections Πᵢ(1)(x) showing the decomposition of the
+constant function into eigenspace components.
+
+## Mathematical Details
+
+### Resolvent Bridge Theorem
+
+The certification uses the resolvent bridge: if ``\varepsilon_K \cdot \|R_{A_K}(z)\| < 1``
+on a circle around λ, then the infinite-dimensional operator L has exactly one
+eigenvalue inside that circle.
+
+### Truncation Error
+
+The truncation error is bounded by:
+```math
+\varepsilon_K = C_2 \cdot \left(\frac{2}{3}\right)^{K+1}
+```
+where C₂ ≈ 10.0581.
+
+### Spectral Expansion
+
+For the non-normal GKW operator:
+```math
+L^n \cdot 1 = \sum_{i=1}^{m} \lambda_i^n \Pi_i(1) + O(|\lambda_{m+1}|^n)
+```
+
+The rate of convergence to the Gauss measure is determined by |λ₂/λ₁| ≈ 0.303663.

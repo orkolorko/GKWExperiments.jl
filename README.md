@@ -50,8 +50,17 @@ resolvent certification.
 
 ## Documentation
 
-The package documentation is built with [Documenter.jl](https://documenter.juliadocs.org/).
-To preview it locally run:
+The [online documentation](https://orkolorko.github.io/GKWExperiments.jl/dev/)
+includes:
+
+- **[Discretization](https://orkolorko.github.io/GKWExperiments.jl/dev/discretization/)**:
+  how $A_K$ is assembled and how $\varepsilon_K$ is bounded.
+- **[Certification Pipeline](https://orkolorko.github.io/GKWExperiments.jl/dev/certification_pipeline/)**:
+  detailed description of the two-script pipeline (resolvent certification,
+  Schur-direct block method, transfer bridge, NK refinement, $\ell_j(1)$,
+  tail bound, and the K = 1024 variant).
+
+To build the docs locally:
 
 ```julia
 import Pkg
