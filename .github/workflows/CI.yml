@@ -30,6 +30,8 @@ jobs:
           - x64
     steps:
       - uses: actions/checkout@v5
+      - name: Clone BallArithmetic.jl
+        run: git clone https://github.com/JuliaBallArithmetic/BallArithmetic.jl.git ../BallArithmetic.jl
       - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.version }}
@@ -52,6 +54,8 @@ jobs:
       statuses: write
     steps:
       - uses: actions/checkout@v5
+      - name: Clone BallArithmetic.jl
+        run: git clone https://github.com/JuliaBallArithmetic/BallArithmetic.jl.git ../BallArithmetic.jl
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1'

@@ -7,13 +7,31 @@
 
 `GKWExperiments.jl` collects numerical helpers for studying the Gauss–Kuzmin–
 Wirsing (GKW) transfer operator using [ArbNumerics.jl](https://github.com/JeffreySarnoff/ArbNumerics.jl)
-and [BallArithmetic.jl](https://github.com/orkolorko/BallArithmetic.jl).
+and [BallArithmetic.jl](https://github.com/JuliaBallArithmetic/BallArithmetic.jl).
 It provides:
 
 - Routines for evaluating Hurwitz and Dirichlet zeta functions
 - Galerkin discretisations of the transfer operator
 - **Rigorous eigenvalue certification** via resolvent bounds and spectral projectors
 - **Spectral expansion** of L^n · 1 with the Gauss problem (convergence to invariant measure)
+
+## Prerequisites
+
+This package depends on
+[BallArithmetic.jl](https://github.com/JuliaBallArithmetic/BallArithmetic.jl),
+which is not yet registered in the General registry.  Until the next release,
+add the development version manually before activating this project:
+
+```julia
+import Pkg
+Pkg.develop(url="https://github.com/JuliaBallArithmetic/BallArithmetic.jl")
+```
+
+or, if you have a local clone:
+
+```julia
+Pkg.develop(path="/path/to/BallArithmetic.jl")
+```
 
 ## Certification Scripts
 
