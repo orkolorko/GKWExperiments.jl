@@ -1,4 +1,4 @@
-# Discretization of the GKW Transfer Operator
+# Discretization
 
 This document describes how the Gauss--Kuzmin--Wirsing (GKW) transfer operator
 is discretized into a finite matrix, and how the discretization error is

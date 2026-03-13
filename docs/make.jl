@@ -7,6 +7,7 @@ makedocs(;
     modules=[GKWExperiments],
     authors="Isaia Nisoli",
     sitename="GKWExperiments.jl",
+    warnonly=[:missing_docs],
     format=Documenter.HTML(;
         canonical="https://orkolorko.github.io/GKWExperiments.jl",
         edit_link="main",

@@ -4,7 +4,7 @@ This page describes the full two-script pipeline that certifies the first 50
 eigenvalues of the GKW transfer operator $L_1 : H^2(D_1) \to H^2(D_1)$ and
 computes the spectral coefficients $\ell_j(1)$ with rigorous error bounds.
 For the discretization of $L_1$ and the definitions of $A_K$, $\varepsilon_K$,
-and $C_2$ see [Discretization](@ref).
+and $C_2$ see [Discretization](discretization.md).
 
 ---
 
@@ -21,7 +21,7 @@ checkpoints in `data/`:
 A third script, `scripts/bigfloat_spectral_K1024.jl`, uses $K = 1024$ and
 2048-bit arithmetic to compute tighter spectral coefficients; it loads Script 1's
 $M_{\infty,j}$ data and applies a different strategy for $\ell_j(1)$ (see
-[K = 1024 variant](@ref)).
+[K = 1024 Variant](@ref)).
 
 All intermediate results are cached as `.jls` files so that each script can be
 interrupted and resumed from any completed phase.

@@ -38,8 +38,8 @@ are available at the REPL through Julia's help mode as usual, e.g. `?mid`.
 
 ## Further reading
 
-- [Discretization](@ref): how the matrix $A_K$ is assembled and how $\varepsilon_K$ is bounded.
-- [Certification Pipeline](@ref): detailed walkthrough of the two-script resolvent/NK pipeline.
+- [Discretization](discretization.md): how the matrix $A_K$ is assembled and how $\varepsilon_K$ is bounded.
+- [Certification Pipeline](certification_pipeline.md): detailed walkthrough of the two-script resolvent/NK pipeline.
 
 ## Certification Scripts
 
